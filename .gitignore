@@ -18,6 +18,9 @@ $RECYCLE.BIN/
 # Windows shortcuts
 *.lnk
 
+#databasefiles
+*.sqlite
+
 # =========================
 # Operating System Files
 # =========================
