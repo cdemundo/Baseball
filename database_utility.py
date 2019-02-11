@@ -107,7 +107,124 @@ class DatabaseHelper(object):
 		batting_df = pd.DataFrame(self.parse_bbref_batter_df(raw_df), columns=batting_stat_cols)
 		pitching_df = pd.DataFrame(self.parse_bbref_pitcher_df(raw_df), columns=pitching_stat_cols)
 
+		#DO DATA CLEANING BEFORE RETURNING
+		pitching_df = self.clean_up_dates(pitching_df)
+		batting_df = self.clean_up_dates(batting_df)
+
+		#ADD UNIQUE ID COLUMNS
+		id_col = pitching_df['game_date'].astype(str) + pitching_df['stadium'] + pitching_df['start_time'] + pitching_df['player']
+		pitching_df.insert(loc=0, column='game_id', value=id_col)
+
+		id_col = batting_df['game_date'].astype(str) + batting_df['stadium'] + batting_df['start_time'] + batting_df['player']
+		batting_df.insert(loc=0, column='game_id', value=id_col)
+
 		return batting_df, pitching_df
+
+	def calc_pitching_fd_score(self, filepath):
+		'''
+		We need to add in some columns and do some cleaning to calculate the Pitching specific FD score
+		'''
+
+		batting_df, pitching_df = self.pull_raw_bbref_data(filepath)
+
+		#DATA CLEANUP
+		#if ER is above 15, set it equal to 0 as it's likely a mistake
+		pitching_df['ER'] = pd.to_numeric(pitching_df['ER'])
+		pitching_df.loc[pitching_df['ER'] > 14,'ER'] = 0
+
+		#we will do the same for innings pitched - assuming it should be a max of 9, which is a complete game
+		#this induces some NA's which we will drop at the end
+		pitching_df['IP'] = pd.to_numeric(pitching_df['IP'], errors='coerce')
+		pitching_df.loc[pitching_df['IP'] > 9, 'IP'] = 0.0
+
+		#same for strikeouts
+		pitching_df['SO'] = pd.to_numeric(pitching_df['SO'], errors='coerce')
+
+		#a win is indicated in a weird column - it's pulled from a text scrape on Baseball Reference thats in the same spot as the position for batters, which is why the column is called 'position'
+		#if the string in this column contains a 'W', we can say this pitcher got a win
+
+		#first convert NaNs to string so we can search using str.contains
+		pitching_df['position'] = pitching_df['position'].fillna("NA")
+		#then set a flag it was a win
+		pitching_df.loc[pitching_df['position'].str.contains('W'), 'win_recorded'] = 1
+		#fill the non wins with 0
+		pitching_df['win_recorded'] = pitching_df['win_recorded'].fillna(0)
+
+		pitching_df.drop_duplicates(inplace=True)
+
+		#Fanduels uses a metric called 'quality starts' where points are given if a starting pitcher has a good game.  We need to calculate this
+
+		#first group and find the first pitcher of each game
+		qual_start_df = pitching_df.groupby(['game_date', 'stadium', 'start_time', 'team'])['player'].first().reset_index()
+
+		#then create a new id column we will join back to the original df on.  we want an ID for the game and team, not specific to the player
+		qual_start_df['first_pitch_id'] = qual_start_df['game_date'].astype(str) + qual_start_df['stadium'] + qual_start_df['start_time'] + qual_start_df['team']
+		#we need to create this ID in the other df too so we can merge
+		pitching_df['first_pitch_id'] = pitching_df['game_date'].astype(str) + pitching_df['stadium'] + pitching_df['start_time'] + qual_start_df['team']
+
+		#take the subset of just the two columns we need - rename player so it doesn't duplicate
+		qual_start_df = qual_start_df[['first_pitch_id', 'player']]
+		qual_start_df.columns = ['first_pitch_id', 'first_pitcher']
+
+		#join it back to the original df
+		pitching_df = pd.merge(pitching_df, qual_start_df, on='first_pitch_id')
+
+		#create a bool column to indicate if a row contains a starting pitcher
+		pitching_df.loc[pitching_df['player'] == pitching_df['first_pitcher'], 'is_first_pitcher'] = 1
+		pitching_df.loc[pitching_df['player'] != pitching_df['first_pitcher'], 'is_first_pitcher'] = 0
+
+		#lets clean up the dataframe and get rid of unneeded columns
+		pitching_df.drop(['first_pitcher', 'first_pitch_id'], axis=1, inplace=True)
+
+		#find the quality starts using boolean filters
+		qual_start_df = pitching_df[(pitching_df['ER'] <= 3) & (pitching_df['is_first_pitcher'] == 1) & (pitching_df['IP'] >= 6)]
+		qual_start_df['quality_start'] = 1
+		#take only the columns we need
+		qual_start_df = qual_start_df[['game_id', 'quality_start']]
+
+		#merge back in to the original df, left join to keep all the original rows
+		pitching_df = pd.merge(pitching_df, qual_start_df, on='game_id', how='left')
+		pitching_df['quality_start'] = pitching_df['quality_start'].fillna(0)
+
+		#clean up memory
+		del qual_start_df
+
+		#finally, for each row in the df - calculate what the FD score should be
+		pitching_df['fd_score'] = pitching_df.apply(self.fd_pitching_score, axis=1)
+
+		return pitching_df
+
+
+	def fd_pitching_score(self, row):
+		#IP are worth 3 points per completed inning
+		
+		#so if ip is 4.2, this will split and do:
+		#4*3 + 2 = 14 points
+		ip = str(row['IP']).split('.')
+		#first value is completed innings
+		ip_pts = int(ip[0])*3
+		#add the fractional value which should be 0,1,2
+		ip_pts += int(ip[1])
+		
+		#SO are a straight 3 points per SO
+		so_pts = row['SO']*3
+		
+		#ER are negative 3 points per 1 ER
+		er_pts = -(row['ER']*3)
+		
+		#a win is worth 6 points
+		win_pts = row['win_recorded']*6
+		
+		#and a quality start is worth 4 points
+		qual_start_pts = row['quality_start']*4
+		
+		return ip_pts+so_pts+er_pts+win_pts+qual_start_pts
+
+	def calc_batting_fd_score(self, pitching_df, filepath):
+		batting_df, pitching_df = self.pull_raw_bbref_data(filepath)
+
+
+		
 
 	#some utility functions for cleaning up the raw BBRef data.  They could be nicer, but they work for now.
 	def parse_bbref_batter_df(self, df):
@@ -181,7 +298,37 @@ class DatabaseHelper(object):
 		return all_pitcher_list           
 
 
+	def clean_up_dates(self, df):
+		'''
+			General cleanup of bbref data before returning it.  Things like formatting dates, location, etc
+		'''
 
+		df['Day of Week'], df['game_date'] = df['game_date'].str.split(',', 1).str
+		df['game_date'] = pd.to_datetime(df['game_date'], infer_datetime_format=True)
+		df['year'] = df['game_date'].map(lambda x : x.year)
+		#pitching_df['year'] = pitching_df['year'].astype('int')
+
+		#clean up start time strings
+		clean_times = []
+		for time in df['start_time'].str.split(': '):
+			try:
+				clean_times.append(time[1].split(' L')[0])
+			except IndexError:
+				clean_times.append("unknown_start_time")
+				
+		df['start_time'] = clean_times
+
+		#clean up locations
+		try:
+			location_df = pd.read_csv('baseball_key_joiner.csv')
+
+			location_df.rename(columns={'team_name': 'home_team'}, inplace=True)
+			df = pd.merge(df, location_df[['home_team', 'stadium']], on='home_team')
+			df = df.drop('location', 1)
+		except FileNotFoundError:
+			print("Couldn't find the baseball stadium csv - should be called 'baseball_key_joiner.csv")
+
+		return df
 
 	def create_player_lookup_csv(self):
 		"""
