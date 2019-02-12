@@ -301,10 +301,21 @@ class DatabaseHelper(object):
 
 		# Merge statcast and bbref databases, dropna (there are a lot b/c statcast has +1 year of data with no bbref values)
 		batter_dataframe_final = batting_df.merge(statcast_data, how='left', left_on='game_id', right_on='game_id')
+		batter_dataframe_final.drop(columns=['home_team_y', 'game_date_y'], inplace=True)
+		batter_dataframe_final.rename(columns={"home_team_x": "home_team", "game_date_x" : "game_date"}, inplace=True)
 		batter_dataframe_final = batter_dataframe_final.dropna()
 
 		# Score game performance
 		batter_dataframe_final['fd_score'] = batter_dataframe_final.apply(self.fd_batting_score, axis=1)
+
+		# Call ytd_avg_calculator_batter to generate YTD averages for all fanduel events
+		batter_dataframe_final[['hbp_ytd_avg', \
+			'hr_ytd_avg', \
+			'single_ytd_avg', \
+			'double_ytd_avg', \
+			'triple_ytd_avg', \
+			'walk_ytd_avg', \
+			'fds_ytd_avg']] = batter_dataframe_final.apply(self.ytd_avg_calculator_batter, args=(batter_dataframe_final,), axis=1)
 
 		return batter_dataframe_final
 
@@ -323,6 +334,23 @@ class DatabaseHelper(object):
 
 		return x
 
+	def ytd_avg_calculator_batter(self, row, batter_frame):
+		# Helper function used with following line of .apply to calculate YTD average score by player, by fan duel event
+		# function_test[['hbp_ytd_avg','hr_ytd_avg', 'single_ytd_avg', 'double_ytd_avg', 'triple_ytd_avg', 'walk_ytd_avg', 'fds_ytd_avg']] = function_test.apply(ytd_avg_calculator_batter, args=(function_test,), axis=1)
+
+		filtered_df = batter_frame[ (batter_frame['player'] == row['player']) & \
+		                            (batter_frame['game_date'] < row['game_date']) & \
+		                            (batter_frame['year'] == row['year'])]
+
+		hbp_ytd_avg = filtered_df['hit_by_pitch'].mean()
+		hr_ytd_avg = filtered_df['home_run'].mean()
+		single_ytd_avg = filtered_df['single'].mean()
+		double_ytd_avg = filtered_df['double'].mean()
+		triple_ytd_avg = filtered_df['triple'].mean()
+		walk_ytd_avg = filtered_df['walk'].mean()
+		fds_ytd_avg = filtered_df['fd_score'].mean()
+
+		return pd.Series([hbp_ytd_avg, hr_ytd_avg, single_ytd_avg, double_ytd_avg, triple_ytd_avg, walk_ytd_avg, fds_ytd_avg], index=['hbp_ytd_avg','hr_ytd_avg', 'single_ytd_avg', 'double_ytd_avg', 'triple_ytd_avg', 'walk_ytd_avg', 'fds_ytd_avg'])
 
 	#some utility functions for cleaning up the raw BBRef data.  They could be nicer, but they work for now.
 	def parse_bbref_batter_df(self, df):
