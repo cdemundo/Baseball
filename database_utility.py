@@ -274,22 +274,22 @@ class DatabaseHelper(object):
 		statcast_df_3 = statcast_df_2.merge(stadium_codes, how='left', left_on='home_team', right_on='team_abbr')
 
 		# Ad hoc basic key generation - can extract this to a function later if necessary
-		# Matches on game_id2 since no 'start_time' value is available for statcast
+		# Matches on game_id since no 'start_time' value is available for statcast
 		statcast_df_3['game_date'] = pd.to_datetime(statcast_df_3['game_date'])
 		statcast_df_3['game_date'] = statcast_df_3['game_date'].astype(str)
 		statcast_df_3['stadium'] = statcast_df_3['stadium'].astype(str)
 
-		statcast_df_3['game_id2'] = statcast_df_3['game_date'] + \
+		statcast_df_3['game_id'] = statcast_df_3['game_date'] + \
                                     statcast_df_3['stadium'] + \
                                     statcast_df_3['key_bbref'].astype(str)
 
-		# Counts and groups events by game_id2 and event type, then unpacks events via unstack into their own columns
-		batter_agg = statcast_df_3.groupby(['batter', 'home_team', 'game_date', 'game_id2', 'events']).size() \
+		# Counts and groups events by game_id and event type, then unpacks events via unstack into their own columns
+		batter_agg = statcast_df_3.groupby(['batter', 'home_team', 'game_date', 'game_id', 'events']).size() \
                                     .unstack(fill_value=0)
 		batter_agg2 = batter_agg.reset_index()
 
 		# Aggregates fan duel values
-		batter_agg3 = batter_agg2.groupby(['batter', 'home_team', 'game_date', 'game_id2']) \
+		batter_agg3 = batter_agg2.groupby(['batter', 'home_team', 'game_date', 'game_id']) \
                                             .agg({ 'hit_by_pitch' : 'sum', \
                                             'home_run' : 'sum', \
                                             'single' : 'sum', \
@@ -300,7 +300,7 @@ class DatabaseHelper(object):
 		statcast_data = batter_agg3.reset_index()
 
 		# Merge statcast and bbref databases, dropna (there are a lot b/c statcast has +1 year of data with no bbref values)
-		batter_dataframe_final = batting_df.merge(statcast_data, how='left', left_on='game_id2', right_on='game_id2')
+		batter_dataframe_final = batting_df.merge(statcast_data, how='left', left_on='game_id', right_on='game_id')
 		batter_dataframe_final = batter_dataframe_final.dropna()
 
 		# Score game performance
