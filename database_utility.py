@@ -2,16 +2,18 @@ import sqlite3
 import pandas as pd
 import datetime
 
+from pybaseball import playerid_reverse_lookup
+
 class DatabaseHelper(object):
 	def __init__(self, filepath):
 		self.filepath = filepath
 
 	def pull_raw_statcast_data(self, start_date = "", end_date = "", table_name = 'pitch_data'):
 		"""
-		Utility function to get raw pitch data from the sqlite file, using the filepath passed 
-		on instantiation.  
+		Utility function to get raw pitch data from the sqlite file, using the filepath passed
+		on instantiation.
 
-		Can specify dates to pull, get all data in the database if not.  Converts to a pandas dataframe, 
+		Can specify dates to pull, get all data in the database if not.  Converts to a pandas dataframe,
 		does some cleaning and returns
 
 		Parameters
@@ -21,7 +23,7 @@ class DatabaseHelper(object):
 
 		end_date : str
 			End date in format 'YYYY-MM-DD'
-		
+
 		Returns
 		----------
 		dataframe
@@ -78,7 +80,7 @@ class DatabaseHelper(object):
 		----------
 		filepath : str
 			location of the bbref.jl file
-		
+
 		Returns
 		----------
 		dataframe
@@ -86,7 +88,7 @@ class DatabaseHelper(object):
 		"""
 		raw_df = pd.read_json(filepath, lines=True)
 
-		
+
 		#first, we want to get information about what the columns will be from the raw dataframe
 		batter_stats = raw_df['away_batter_stats'][0]
 		pitcher_stats = raw_df['away_pitching_stats'][0]
@@ -99,7 +101,7 @@ class DatabaseHelper(object):
 		pitcher_name = next(iter(raw_df.iloc[0]['away_pitching_stats']))
 
 		#each entry in batter_stats and pitcher_stats is a dictionary representing a player - use specific players to get the keys (columns)
-		batting_stat_cols = meta_info_cols + list(batter_stats[batter_name].keys()) 
+		batting_stat_cols = meta_info_cols + list(batter_stats[batter_name].keys())
 		pitching_stat_cols = meta_info_cols + list(pitcher_stats[pitcher_name].keys())
 
 		#finally, parse the dictionaries in the raw dataframe to return a new dataframe where every row is the performance of an individual player in a single game
@@ -197,7 +199,7 @@ class DatabaseHelper(object):
 
 	def fd_pitching_score(self, row):
 		#IP are worth 3 points per completed inning
-		
+
 		#so if ip is 4.2, this will split and do:
 		#4*3 + 2 = 14 points
 		ip = str(row['IP']).split('.')
@@ -205,26 +207,26 @@ class DatabaseHelper(object):
 		ip_pts = int(ip[0])*3
 		#add the fractional value which should be 0,1,2
 		ip_pts += int(ip[1])
-		
+
 		#SO are a straight 3 points per SO
 		so_pts = row['SO']*3
-		
+
 		#ER are negative 3 points per 1 ER
 		er_pts = -(row['ER']*3)
-		
+
 		#a win is worth 6 points
 		win_pts = row['win_recorded']*6
-		
+
 		#and a quality start is worth 4 points
 		qual_start_pts = row['quality_start']*4
-		
+
 		return ip_pts+so_pts+er_pts+win_pts+qual_start_pts
 
 	def calc_batting_fd_score(self, pitching_df, filepath):
 		batting_df, pitching_df = self.pull_raw_bbref_data(filepath)
 
 
-		
+
 
 	#some utility functions for cleaning up the raw BBRef data.  They could be nicer, but they work for now.
 	def parse_bbref_batter_df(self, df):
@@ -294,8 +296,8 @@ class DatabaseHelper(object):
 				for value in home_pitcher_stats[player].values():
 					temp_list.append(value)
 				all_pitcher_list.append(meta_info_list + temp_list)
-			
-		return all_pitcher_list           
+
+		return all_pitcher_list
 
 
 	def clean_up_dates(self, df):
@@ -315,7 +317,7 @@ class DatabaseHelper(object):
 				clean_times.append(time[1].split(' L')[0])
 			except IndexError:
 				clean_times.append("unknown_start_time")
-				
+
 		df['start_time'] = clean_times
 
 		#clean up locations
@@ -332,9 +334,9 @@ class DatabaseHelper(object):
 
 	def create_player_lookup_csv(self):
 		"""
-		Use pybaseball's lookup feature to generate a csv of all players names and ids in 
+		Use pybaseball's lookup feature to generate a csv of all players names and ids in
 		the raw database
-			
+
 		"""
 		raw_data = self.dh.pull_raw_data()
 
