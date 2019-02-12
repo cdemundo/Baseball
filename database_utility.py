@@ -114,11 +114,14 @@ class DatabaseHelper(object):
 		batting_df = self.clean_up_dates(batting_df)
 
 		#ADD UNIQUE ID COLUMNS
-		id_col = pitching_df['game_date'].astype(str) + pitching_df['stadium'] + pitching_df['start_time'] + pitching_df['player']
+		id_col = pitching_df['game_date'].astype(str) + pitching_df['stadium'] + pitching_df['player']
 		pitching_df.insert(loc=0, column='game_id', value=id_col)
 
-		id_col = batting_df['game_date'].astype(str) + batting_df['stadium'] + batting_df['start_time'] + batting_df['player']
+		id_col = batting_df['game_date'].astype(str) + batting_df['stadium'] + batting_df['player']
 		batting_df.insert(loc=0, column='game_id', value=id_col)
+
+		#id_col = batting_df['game_date'].astype(str) + batting_df['stadium'] + batting_df['start_time'] + batting_df['player']
+		#batting_df.insert(loc=0, column='game_id', value=id_col)
 
 		return batting_df, pitching_df
 
@@ -222,10 +225,103 @@ class DatabaseHelper(object):
 
 		return ip_pts+so_pts+er_pts+win_pts+qual_start_pts
 
-	def calc_batting_fd_score(self, pitching_df, filepath):
-		batting_df, pitching_df = self.pull_raw_bbref_data(filepath)
+	def calc_batting_fd_score(self, start_date='2018-05-01', end_date='2018-10-31', filepath1 = 'bbref.jl', filepath2 = 'baseball_key_joiner.csv'):
+		# PART 1 - get bbref data
+		# Inputs:
+		# start_date - beginning of time to pull statcast data
+		# stop_date - time to cease pulling statcast data
+		# Filepath1 - include path to filepath to bbref .jl file from scraper
+		# Filepath2 - include path to baseball_name_translator
 
+		# Outputs:
+		# DF of batting stats merged from both bbref and statcast sources
 
+		# Note:
+		# There are no dates for bbref data bcause the scraping system has what it has
+		# As we scrape more and icnrease our dataset we can hone in on specific seasons using these date variables
+
+		# PART 1 - pull in bbref data and store as a df to be merge later
+		try:
+			batting_df, pitching_df = self.pull_raw_bbref_data(filepath1)
+
+		except FileNotFoundError:
+			print("Couldn't find bbref.jl data source in the indicated directory.")
+
+		# PART 2 - get statcast data
+		statcast_input_frame = self.pull_raw_statcast_data(start_date=start_date, end_date=end_date)
+
+		events_worth_points = ['single', 'double', 'triple', 'walk', 'hit_by_pitch', 'home_run', 'hit_by_pitch']
+		statcast_df = statcast_input_frame[ statcast_input_frame['events'].isin(events_worth_points) ]
+
+		# Gets a list of batter keys, (unique list prevents repeat occurances)
+		player_list = list(statcast_df['batter'].unique().astype(int))
+
+		# Lookup keys to get each player's various keys (mlb, bbref, etc.)
+		player_id_values = playerid_reverse_lookup(player_list, key_type='mlbam')
+
+		# Merge player keys to batter df based on key
+		cols_to_merge = ['name_last', 'name_first', 'key_mlbam', 'key_bbref', 'key_fangraphs', 'key_retro']
+		statcast_df_2 = statcast_df.merge(player_id_values[cols_to_merge], how='inner', left_on='batter', right_on='key_mlbam')
+
+		# Bring in stadium codes to to use with "home team" to determine the "stadium" where the game took place
+		try:
+			stadium_codes = pd.read_csv(filepath2)
+
+		except FileNotFoundError:
+			print("Couldn't find baseball_key_joiner.csv in the same directory.")
+
+		# Merge stadium codes onto existing statcast DF, merge on home team name
+		statcast_df_3 = statcast_df_2.merge(stadium_codes, how='left', left_on='home_team', right_on='team_abbr')
+
+		# Ad hoc basic key generation - can extract this to a function later if necessary
+		# Matches on game_id2 since no 'start_time' value is available for statcast
+		statcast_df_3['game_date'] = pd.to_datetime(statcast_df_3['game_date'])
+		statcast_df_3['game_date'] = statcast_df_3['game_date'].astype(str)
+		statcast_df_3['stadium'] = statcast_df_3['stadium'].astype(str)
+
+		statcast_df_3['game_id2'] = statcast_df_3['game_date'] + \
+                                    statcast_df_3['stadium'] + \
+                                    statcast_df_3['key_bbref'].astype(str)
+
+		# Counts and groups events by game_id2 and event type, then unpacks events via unstack into their own columns
+		batter_agg = statcast_df_3.groupby(['batter', 'home_team', 'game_date', 'game_id2', 'events']).size() \
+                                    .unstack(fill_value=0)
+		batter_agg2 = batter_agg.reset_index()
+
+		# Aggregates fan duel values
+		batter_agg3 = batter_agg2.groupby(['batter', 'home_team', 'game_date', 'game_id2']) \
+                                            .agg({ 'hit_by_pitch' : 'sum', \
+                                            'home_run' : 'sum', \
+                                            'single' : 'sum', \
+                                            'double' : 'sum', \
+                                            'triple' : 'sum', \
+                                            'walk' : 'sum', \
+                                            'hit_by_pitch' : 'sum'})
+		statcast_data = batter_agg3.reset_index()
+
+		# Merge statcast and bbref databases, dropna (there are a lot b/c statcast has +1 year of data with no bbref values)
+		batter_dataframe_final = batting_df.merge(statcast_data, how='left', left_on='game_id2', right_on='game_id2')
+		batter_dataframe_final = batter_dataframe_final.dropna()
+
+		# Score game performance
+		batter_dataframe_final['fd_score'] = batter_dataframe_final.apply(self.fd_batting_score, axis=1)
+
+		return batter_dataframe_final
+
+	def fd_batting_score(self, row):
+		x = 0
+	    # Does data capture the following scenario:
+	    # 1 x HR = 12pts + 3.2pts <- is this how fanduel works?
+		x = x + float(row['RBI']) * 3.5
+		x = x + float(row['R']) * 3.2
+		x = x + float(row['BB']) * 3
+		x = x + row['single'] * 3
+		x = x + row['double'] * 6
+		x = x + row['triple'] * 9
+		x = x + row['home_run'] * 12
+		x = x + row['hit_by_pitch'] * 3
+
+		return x
 
 
 	#some utility functions for cleaning up the raw BBRef data.  They could be nicer, but they work for now.
