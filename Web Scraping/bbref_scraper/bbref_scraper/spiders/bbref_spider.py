@@ -17,7 +17,7 @@ class BBRefSpider(scrapy.Spider):
 	#'https://www.baseball-reference.com/leagues/MLB/2016-schedule.shtml',
 	#'https://www.baseball-reference.com/leagues/MLB/2018-schedule.shtml']
 
-	start_urls = ['https://www.baseball-reference.com/leagues/MLB/2016-schedule.shtml']
+	start_urls = ['https://www.baseball-reference.com/leagues/MLB/2015-schedule.shtml']
 
 	def start_requests(self):
 
@@ -52,15 +52,20 @@ class BBRefSpider(scrapy.Spider):
 		for em in ems:
 			links.append(em.css('a::attr(href)').extract_first())
 
+		links = set(links)
+		cached_links = set(self.cached_links.values)
+
+		links = list(links-cached_links)
+
 		for link in links:
 			#print("LINK IS: ", link)
-			if link in self.cached_links.values:
+			#if link in self.cached_links.values:
 				#we've already scraped this link
-				continue
-			else:
+				#continue
+			#else:
 				#parse the link
 				#we set max timeout high because of Splash getting overloaded with requests in the queue https://splash.readthedocs.io/en/stable/faq.html#i-m-getting-lots-of-504-timeout-errors-please-help
-				yield SplashRequest(base_url+link, self.parse_game_page, args={'wait': 20, 'timeout' : 90}, meta={'link_to_cache' : link})
+			yield SplashRequest(base_url+link, self.parse_game_page, args={'wait': 20, 'timeout' : 90}, meta={'link_to_cache' : link})
 
 
 
