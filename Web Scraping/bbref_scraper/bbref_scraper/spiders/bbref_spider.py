@@ -2,21 +2,49 @@ import scrapy
 from scrapy_splash import SplashRequest
 from datetime import datetime
 from scrapy.crawler import CrawlerProcess
+import sys
+sys.path.append(r"C:\Users\Chris\Google Drive\Programming\Baseball")
+import database_utility
+import json
+import pandas as pd
 
 
 class BBRefSpider(scrapy.Spider):
 	name = "bbref"    
 
-	start_urls = ['https://www.baseball-reference.com/leagues/MLB/2017-schedule.shtml',
-	'https://www.baseball-reference.com/leagues/MLB/2015-schedule.shtml',
-	'https://www.baseball-reference.com/leagues/MLB/2016-schedule.shtml',
-	'https://www.baseball-reference.com/leagues/MLB/2018-schedule.shtml']
+	#start_urls = ['https://www.baseball-reference.com/leagues/MLB/2017-schedule.shtml',
+	#'https://www.baseball-reference.com/leagues/MLB/2015-schedule.shtml',
+	#'https://www.baseball-reference.com/leagues/MLB/2016-schedule.shtml',
+	#'https://www.baseball-reference.com/leagues/MLB/2018-schedule.shtml']
+
+	start_urls = ['https://www.baseball-reference.com/leagues/MLB/2016-schedule.shtml']
 
 	def start_requests(self):
+
+		#load a list of game links that we have already tried
+		try:
+			self.cached_links = pd.read_csv('scrape_cache.csv', header=None)
+			self.cached_links.columns = ['links']
+		except:
+			self.cached_links = pd.DataFrame()
+			print('No baseball data cache found')
+
+		#we've also already scraped 3000 games without recording the link.  i don't want to rescrape those so we'll check into the database
+		dh = database_utility.DatabaseHelper(sql_filepath = 'baseball_data.sqlite', key_joiner_filepath = r"C:\Users\Chris\Google Drive\Programming\Baseball\baseball_key_joiner.csv")
+
+		filepath = r'C:\\Users\\Chris\\Google Drive\\Programming\\Baseball\\Web Scraping\\bbref_scraper\\bbref_scraper\\bbref.jl'
+		batting_df, pitching_df = dh.pull_raw_bbref_data(filepath)
+		print("Existing game db loaded!")
+
+		#panda series of games we already scraped
+		self.games_already_scraped = pitching_df['game_date'].astype(str) + pitching_df['home_team'] + pitching_df['away_team']
+
+		#scrape the individual season pages
 		for url in self.start_urls:
 			yield SplashRequest(url, self.parse_season_page, args={'wait': 20})
 
 	def parse_season_page(self, response):
+		print("PARSING THE SEASON PAGE")
 		base_url = "https://www.baseball-reference.com"
 		ems = response.css('em')
 
@@ -24,9 +52,17 @@ class BBRefSpider(scrapy.Spider):
 		for em in ems:
 			links.append(em.css('a::attr(href)').extract_first())
 
-		for link in links:     
-			print("LINK IS: ", base_url+link) 
-			yield SplashRequest(base_url+link, self.parse_game_page, args={'wait': 20, 'timeout' : 90})
+		for link in links:
+			#print("LINK IS: ", link)
+			if link in self.cached_links.values:
+				#we've already scraped this link
+				continue
+			else:
+				#parse the link
+				#we set max timeout high because of Splash getting overloaded with requests in the queue https://splash.readthedocs.io/en/stable/faq.html#i-m-getting-lots-of-504-timeout-errors-please-help
+				yield SplashRequest(base_url+link, self.parse_game_page, args={'wait': 20, 'timeout' : 90}, meta={'link_to_cache' : link})
+
+
 
 	def parse_game_page(self, response):
 
@@ -43,63 +79,83 @@ class BBRefSpider(scrapy.Spider):
 		except:
 			game_date = 'unknown_date'
 
+		#need to format gamedate to check against db
 		try:
-			start_time = str(game_stats[3])
-		except:
-			start_time = 'unknown_start_time'
+			temp_date = game_date.split(',',1)[1]
+			temp_date = pd.to_datetime(temp_date).strftime('%Y-%m-%d')
+		except IndexError:
+			temp_date = 'unknown_date'
 
-		try:
-			attendance = str(game_stats[5]).split(': ')[1]
-		except:
-			attendance = 'unknown_attendance'
+		#if this game is already in the database, we can stop scraping and return
+		temp_id = temp_date + home_team + away_team
 
-		try:
-			location = str(game_stats[7]).split(': ')[1]
-		except:
-			location = 'unknown_location'
+		#games already scraped is a pandas series, so lets look in the values
+		if temp_id in self.games_already_scraped.values:
+			print("already in the db!!")
+			#store the link in the cache
+			with open('scrape_cache.csv','a') as fd:
+				fd.write(response.meta['link_to_cache']+'\n')
+			return ""
+		else:
+			print("ok lets do this!")
+			try:
+				start_time = str(game_stats[3])
+			except:
+				start_time = 'unknown_start_time'
 
-		try:
-			game_situation = str(game_stats[11])
-		except:
-			game_situation = 'unknown_game_situation'
+			try:
+				attendance = str(game_stats[5]).split(': ')[1]
+			except:
+				attendance = 'unknown_attendance'
 
-		print("GOT GAME STATS")
+			try:
+				location = str(game_stats[7]).split(': ')[1]
+			except:
+				location = 'unknown_location'
 
-		#parse individual player performance
+			try:
+				game_situation = str(game_stats[11])
+			except:
+				game_situation = 'unknown_game_situation'
 
-		player_stats = response.css('div.table_outer_container')
-		print("LEN OF PLAYER STATS: ", len(player_stats))
+			print("GOT GAME STATS")
 
-		#this returns 6 divs.  the first is away batting, second is home batting. third is away pitching, fourth is home pitching
+			#parse individual player performance
 
-		#batting info
-		away_batting_rows = player_stats[0].css('tbody').css('tr')
-		home_batting_rows = player_stats[1].css('tbody').css('tr')
+			player_stats = response.css('div.table_outer_container')
 
-		away_pitching_rows = player_stats[2].css('tbody').css('tr')
-		home_pitching_rows = player_stats[3].css('tbody').css('tr')
+			#this returns 6 divs.  the first is away batting, second is home batting. third is away pitching, fourth is home pitching
 
-		away_batter_stats = self.parse_stats_rows(away_batting_rows)
-		home_batter_stats = self.parse_stats_rows(home_batting_rows)
+			#batting info
+			away_batting_rows = player_stats[0].css('tbody').css('tr')
+			home_batting_rows = player_stats[1].css('tbody').css('tr')
 
-		away_pitching_stats = self.parse_stats_rows(away_pitching_rows)
-		home_pitching_stats = self.parse_stats_rows(home_pitching_rows)
+			away_pitching_rows = player_stats[2].css('tbody').css('tr')
+			home_pitching_rows = player_stats[3].css('tbody').css('tr')
 
+			away_batter_stats = self.parse_stats_rows(away_batting_rows)
+			home_batter_stats = self.parse_stats_rows(home_batting_rows)
 
+			away_pitching_stats = self.parse_stats_rows(away_pitching_rows)
+			home_pitching_stats = self.parse_stats_rows(home_pitching_rows)
 
-		yield{
-			'game_date' : game_date,
-			'home_team' : home_team,
-			'away_team' : away_team,
-			'start_time' : start_time,
-			'location' : location, 
-			'attendance' : attendance,
-			'game_situation' : game_situation,
-			'away_batter_stats' : away_batter_stats, 
-			'home_batter_stats' : home_batter_stats,
-			'away_pitching_stats' : away_pitching_stats,
-			'home_pitching_stats' : home_pitching_stats
-		}
+			yield{
+				'game_date' : game_date,
+				'home_team' : home_team,
+				'away_team' : away_team,
+				'start_time' : start_time,
+				'location' : location, 
+				'attendance' : attendance,
+				'game_situation' : game_situation,
+				'away_batter_stats' : away_batter_stats, 
+				'home_batter_stats' : home_batter_stats,
+				'away_pitching_stats' : away_pitching_stats,
+				'home_pitching_stats' : home_pitching_stats
+			}
+
+			#store the link in the cache
+			with open('scrape_cache.csv','a') as fd:
+				fd.write(response.meta['link_to_cache']+'\n')
 
 	def parse_stats_rows(self, rows):
 		'''

@@ -5,8 +5,9 @@ import datetime
 from pybaseball import playerid_reverse_lookup
 
 class DatabaseHelper(object):
-	def __init__(self, filepath):
-		self.filepath = filepath
+	def __init__(self, sql_filepath, key_joiner_filepath):
+		self.filepath = sql_filepath
+		self.key_join_path = key_joiner_filepath
 
 	def pull_raw_statcast_data(self, start_date = "", end_date = "", table_name = 'pitch_data'):
 		"""
@@ -225,7 +226,7 @@ class DatabaseHelper(object):
 
 		return ip_pts+so_pts+er_pts+win_pts+qual_start_pts
 
-	def calc_batting_fd_score(self, start_date='2018-05-01', end_date='2018-10-31', filepath1 = 'bbref.jl', filepath2 = 'baseball_key_joiner.csv'):
+	def calc_batting_fd_score(self, start_date='2018-05-01', end_date='2018-10-31', filepath1 = 'bbref.jl'):
 		# PART 1 - get bbref data
 		# Inputs:
 		# start_date - beginning of time to pull statcast data
@@ -265,7 +266,7 @@ class DatabaseHelper(object):
 
 		# Bring in stadium codes to to use with "home team" to determine the "stadium" where the game took place
 		try:
-			stadium_codes = pd.read_csv(filepath2)
+			stadium_codes = pd.read_csv(self.key_join_path)
 
 		except FileNotFoundError:
 			print("Couldn't find baseball_key_joiner.csv in the same directory.")
@@ -418,7 +419,7 @@ class DatabaseHelper(object):
 
 		#clean up locations
 		try:
-			location_df = pd.read_csv('baseball_key_joiner.csv')
+			location_df = pd.read_csv(self.key_join_path)
 
 			location_df.rename(columns={'team_name': 'home_team'}, inplace=True)
 			df = pd.merge(df, location_df[['home_team', 'stadium']], on='home_team')

@@ -1,4 +1,5 @@
 import pandas as pd
+import numpy as np
 from sklearn.model_selection import TimeSeriesSplit
 
 class BaseballModelSelection(object):
@@ -107,6 +108,7 @@ class MovingAverageModel(object):
 			--------------
 			float
 				the predicted value for the given player and game_date
+				returns mean of all values if not enough rows to calculate
 		'''
 
 		#since fitted_x is sorted by player and date, we can simply look up the game
@@ -117,5 +119,10 @@ class MovingAverageModel(object):
 
 		#we filtered out all games > prediction date, so the most recent moving average is the
 		#last row in the filtered df - return it as the prediction
-		return filtered_df.tail(1)['moving_avg'].values
+		val = filtered_df.tail(1)['moving_avg'].values
+
+		if np.isnan(val):
+			return self.y.mean()
+		else:
+			return val
 
