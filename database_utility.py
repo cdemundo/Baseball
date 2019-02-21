@@ -71,7 +71,32 @@ class DatabaseHelper(object):
 
 		return raw_data
 
-	def pull_raw_bbref_data(self, filepath, preload=False, write_csv=False):
+	def load_data(self, preload=True, path2018="", path2017="", write_csv=False):
+		'''
+		Utility function - load data from CSV if CSVs exist. If not, get raw data from .jl files.
+		'''
+
+		if preload:
+			print("Trying to load csvs!")
+
+			try:
+				batting_df = pd.read_csv('batting_df_master.csv')
+				pitching_df = pd.read_csv('pitching_df_master.csv')
+			except FileNotFoundError:
+				print("Couldn't find the files raw_batting_df.csv and raw_pitching_df.csv in the current directory.")
+				return ""
+		else:
+			print("Reading in data..")
+			if (len(path2017) == 0) or (len(path2018) == 0):
+				print("To load raw data, you must pass the path to bbref.jl and bbref_2018.jl")
+				return ""
+			else:
+				batting_df, pitching_df = self.combine_scraped_data(path2017=path2017, path2018=path2018, write_csv = write_csv)
+
+		return batting_df, pitching_df
+
+
+	def pull_raw_bbref_data(self, filepath):
 		"""
 		Utility function to get raw game data from bbref file generated from scraping the baseball reference website.
 
@@ -91,78 +116,69 @@ class DatabaseHelper(object):
 		dataframe
 			A pandas dataframe of pitch data for the specified dates
 		"""
-		if preload:
-			print("Trying to load csvs!")
+		print("Reading in data..")
+		raw_df = pd.read_json(filepath, lines=True)
 
-			try:
-				batting_df = pd.read_csv('raw_batting_df.csv')
-				pitching_df = pd.read_csv('raw_pitching_df.csv')
-			except FileNotFoundError:
-				print("Couldn't find the files raw_batting_df.csv and raw_pitching_df.csv in the current directory.")
-		else:
-			print("Reading in data..")
-			raw_df = pd.read_json(filepath, lines=True)
+		#first, we want to get information about what the columns will be from the raw dataframe
+		batter_stats = raw_df['away_batter_stats'][0]
+		pitcher_stats = raw_df['away_pitching_stats'][0]
 
-			#first, we want to get information about what the columns will be from the raw dataframe
-			batter_stats = raw_df['away_batter_stats'][0]
-			pitcher_stats = raw_df['away_pitching_stats'][0]
+		#these are the 'game information' columns. the rest are stat specific
+		meta_info_cols = ['away_team', 'home_team', 'game_date', 'location', 'start_time', 'attendance', 'game_situation', 'player', 'team']
 
-			#these are the 'game information' columns. the rest are stat specific
-			meta_info_cols = ['away_team', 'home_team', 'game_date', 'location', 'start_time', 'attendance', 'game_situation', 'player', 'team']
+		#get the first batter name so we can use it as a key
+		batter_name = next(iter(raw_df.iloc[0]['away_batter_stats']))
+		pitcher_name = next(iter(raw_df.iloc[0]['away_pitching_stats']))
 
-			#get the first batter name so we can use it as a key
-			batter_name = next(iter(raw_df.iloc[0]['away_batter_stats']))
-			pitcher_name = next(iter(raw_df.iloc[0]['away_pitching_stats']))
+		#each entry in batter_stats and pitcher_stats is a dictionary representing a player - use specific players to get the keys (columns)
+		batting_stat_cols = meta_info_cols + list(batter_stats[batter_name].keys())
+		pitching_stat_cols = meta_info_cols + list(pitcher_stats[pitcher_name].keys())
 
-			#each entry in batter_stats and pitcher_stats is a dictionary representing a player - use specific players to get the keys (columns)
-			batting_stat_cols = meta_info_cols + list(batter_stats[batter_name].keys())
-			pitching_stat_cols = meta_info_cols + list(pitcher_stats[pitcher_name].keys())
+		#finally, parse the dictionaries in the raw dataframe to return a new dataframe where every row is the performance of an individual player in a single game
+		#create a separate batting and pitching df to make it easier to analyze
+		print("Parsing raw dictionaries to get stats...")
+		batting_df = pd.DataFrame(self.parse_bbref_batter_df(raw_df), columns=batting_stat_cols)
+		pitching_df = pd.DataFrame(self.parse_bbref_pitcher_df(raw_df), columns=pitching_stat_cols)
 
-			#finally, parse the dictionaries in the raw dataframe to return a new dataframe where every row is the performance of an individual player in a single game
-			#create a separate batting and pitching df to make it easier to analyze
-			print("Parsing raw dictionaries to get stats...")
-			batting_df = pd.DataFrame(self.parse_bbref_batter_df(raw_df), columns=batting_stat_cols)
-			pitching_df = pd.DataFrame(self.parse_bbref_pitcher_df(raw_df), columns=pitching_stat_cols)
+		#DO DATA CLEANING BEFORE RETURNING
+		print("Cleaning dates...")
+		pitching_df = self.clean_up_dates(pitching_df)
+		batting_df = self.clean_up_dates(batting_df)
 
-			#DO DATA CLEANING BEFORE RETURNING
-			print("Cleaning dates...")
-			pitching_df = self.clean_up_dates(pitching_df)
-			batting_df = self.clean_up_dates(batting_df)
+		#ADD UNIQUE ID COLUMNS
+		id_col = pitching_df['game_date'].astype(str) + pitching_df['stadium'] + pitching_df['player']
+		pitching_df.insert(loc=0, column='game_id', value=id_col)
 
-			#ADD UNIQUE ID COLUMNS
-			id_col = pitching_df['game_date'].astype(str) + pitching_df['stadium'] + pitching_df['player']
-			pitching_df.insert(loc=0, column='game_id', value=id_col)
+		id_col = batting_df['game_date'].astype(str) + batting_df['stadium'] + batting_df['player']
+		batting_df.insert(loc=0, column='game_id', value=id_col)
 
-			id_col = batting_df['game_date'].astype(str) + batting_df['stadium'] + batting_df['player']
-			batting_df.insert(loc=0, column='game_id', value=id_col)
+		print("Converting stats columns to numeric...")
+		#convert numeric columns to numeric - this will make it easier later on to select the appropriate columns for transformations
+		batting_cols = batting_df.columns.drop(['game_id', 'away_team', 'home_team', 'game_date', 'start_time', 'game_situation', 'player', 'team', 'PO', 'A', 'details', 'position', 'day_of_week', 'year', 'attendance', 'stadium'])
+		batting_df[batting_cols] = batting_df[batting_cols].apply(pd.to_numeric, errors='coerce', axis=1)
 
-			print("Converting stats columns to numeric...")
-			#convert numeric columns to numeric - this will make it easier later on to select the appropriate columns for transformations
-			batting_cols = batting_df.columns.drop(['game_id', 'away_team', 'home_team', 'game_date', 'start_time', 'game_situation', 'player', 'team', 'PO', 'A', 'details', 'position', 'day_of_week', 'year', 'attendance', 'stadium'])
-			batting_df[batting_cols] = batting_df[batting_cols].apply(pd.to_numeric, errors='coerce', axis=1)
+		#same for pitching
+		pitching_cols = pitching_df.columns.drop(['game_id', 'away_team', 'home_team', 'game_date', 'start_time', 'game_situation', 'player', 'attendance', 'team', 'position', 'day_of_week', 'year', 'stadium'])
+		pitching_df[pitching_cols] = pitching_df[pitching_cols].apply(pd.to_numeric, errors='coerce', axis=1)
 
-			#same for pitching
-			pitching_cols = pitching_df.columns.drop(['game_id', 'away_team', 'home_team', 'game_date', 'start_time', 'game_situation', 'player', 'attendance', 'team', 'position', 'day_of_week', 'year', 'stadium'])
-			pitching_df[pitching_cols] = pitching_df[pitching_cols].apply(pd.to_numeric, errors='coerce', axis=1)
+		#we havent cleaned up the raw data yet - so drop duplicates
+		batting_df.drop_duplicates(inplace=True)
+		pitching_df.drop_duplicates(inplace=True)
 
-			#we havent cleaned up the raw data yet - so drop duplicates
-			batting_df.drop_duplicates(inplace=True)
-			pitching_df.drop_duplicates(inplace=True)
-
-			if write_csv:
-				pitching_df.to_csv('raw_pitching_df.csv', index=False, header=True)
-				batting_df.to_csv('raw_batting_df.csv', index=False, header=True)
-
+		#finally we want to remove any data from the validation period
+		#pitching_df = pitching_df[pitching_df['game_date'] < '2018-08-01']
+		#batting_df = batting_df[batting_df['game_date'] < '2018-08-01']
 
 		print("Raw data returned!")
 		return batting_df, pitching_df
 
-	def calc_pitching_fd_score(self, filepath, preload = True, write_csv=False):
+	def calc_pitching_fd_score(self, preload = True):
 		'''
 		We need to add in some columns and do some cleaning to calculate the Pitching specific FD score
 		'''
+		batting_df, pitching_df = self.load_data()
 
-		batting_df, pitching_df = self.pull_raw_bbref_data(filepath, preload=preload, write_csv=write_csv)
+		print("Calculating FanDuel pitching score...")
 
 		#DATA CLEANUP
 		#if ER is above 15, set it equal to 0 as it's likely a mistake
@@ -187,8 +203,6 @@ class DatabaseHelper(object):
 		#fill the non wins with 0
 		pitching_df['win_recorded'] = pitching_df['win_recorded'].fillna(0)
 
-		pitching_df.drop_duplicates(inplace=True)
-
 		#Fanduels uses a metric called 'quality starts' where points are given if a starting pitcher has a good game.  We need to calculate this
 
 		#first group and find the first pitcher of each game
@@ -197,7 +211,7 @@ class DatabaseHelper(object):
 		#then create a new id column we will join back to the original df on.  we want an ID for the game and team, not specific to the player
 		qual_start_df['first_pitch_id'] = qual_start_df['game_date'].astype(str) + qual_start_df['stadium'] + qual_start_df['start_time'] + qual_start_df['team']
 		#we need to create this ID in the other df too so we can merge
-		pitching_df['first_pitch_id'] = pitching_df['game_date'].astype(str) + pitching_df['stadium'] + pitching_df['start_time'] + qual_start_df['team']
+		pitching_df['first_pitch_id'] = pitching_df['game_date'].astype(str) + pitching_df['stadium'] + pitching_df['start_time'] + pitching_df['team']
 
 		#take the subset of just the two columns we need - rename player so it doesn't duplicate
 		qual_start_df = qual_start_df[['first_pitch_id', 'player']]
@@ -215,7 +229,9 @@ class DatabaseHelper(object):
 
 		#find the quality starts using boolean filters
 		qual_start_df = pitching_df[(pitching_df['ER'] <= 3) & (pitching_df['is_first_pitcher'] == 1) & (pitching_df['IP'] >= 6)]
-		qual_start_df['quality_start'] = 1
+		
+		#qual_start_df['quality_start'] = 1
+		qual_start_df.insert(0, 'quality_start', 1)
 		#take only the columns we need
 		qual_start_df = qual_start_df[['game_id', 'quality_start']]
 
@@ -228,6 +244,9 @@ class DatabaseHelper(object):
 
 		#finally, for each row in the df - calculate what the FD score should be
 		pitching_df['fd_score'] = pitching_df.apply(self.fd_pitching_score, axis=1)
+
+		#remove columns we don't need
+		pitching_df.drop(['quality_start', 'is_first_pitcher'], axis=1, inplace=True)
 
 		return pitching_df
 
@@ -257,7 +276,7 @@ class DatabaseHelper(object):
 
 		return ip_pts+so_pts+er_pts+win_pts+qual_start_pts
 
-	def calc_batting_fd_score(self, start_date='2018-05-01', end_date='2018-10-31', filepath = 'bbref.jl', preload=False):
+	def calc_batting_fd_score(self, start_date='2018-05-01', end_date='2018-10-31', preload=True):
 		# PART 1 - get bbref data
 		# Inputs:
 		# start_date - beginning of time to pull statcast data
@@ -273,11 +292,7 @@ class DatabaseHelper(object):
 		# As we scrape more and icnrease our dataset we can hone in on specific seasons using these date variables
 
 		# PART 1 - pull in bbref data and store as a df to be merge later
-		try:
-			batting_df, pitching_df = self.pull_raw_bbref_data(filepath, preload)
-
-		except FileNotFoundError:
-			print("Couldn't find bbref.jl data source in the indicated directory.")
+		batting_df, pitching_df = self.load_data(preload=preload)
 
 		# PART 2 - get statcast data
 		print("Getting raw statcast data...")
@@ -342,14 +357,6 @@ class DatabaseHelper(object):
 		# Score game performance
 		batter_dataframe_final['fd_score'] = batter_dataframe_final.apply(self.fd_batting_score, axis=1)
 
-		# Call ytd_avg_calculator_batter to generate YTD averages for all fanduel events
-		# batter_dataframe_final[['hbp_ytd_avg', \
-		# 	'hr_ytd_avg', \
-		# 	'single_ytd_avg', \
-		# 	'double_ytd_avg', \
-		# 	'triple_ytd_avg', \
-		# 	'walk_ytd_avg', \
-		# 	'fds_ytd_avg']] = batter_dataframe_final.apply(self.ytd_avg_calculator_batter, args=(batter_dataframe_final,), axis=1)
 		print("Batting FD Score calculated! Returning data..")
 		return batter_dataframe_final
 
@@ -367,24 +374,6 @@ class DatabaseHelper(object):
 		x = x + row['hit_by_pitch'] * 3
 
 		return x
-
-	def ytd_avg_calculator_batter(self, row, batter_frame):
-		# Helper function used with following line of .apply to calculate YTD average score by player, by fan duel event
-		# function_test[['hbp_ytd_avg','hr_ytd_avg', 'single_ytd_avg', 'double_ytd_avg', 'triple_ytd_avg', 'walk_ytd_avg', 'fds_ytd_avg']] = function_test.apply(ytd_avg_calculator_batter, args=(function_test,), axis=1)
-
-		filtered_df = batter_frame[ (batter_frame['player'] == row['player']) & \
-									(batter_frame['game_date'] < row['game_date']) & \
-									(batter_frame['year'] == row['year'])]
-
-		hbp_ytd_avg = filtered_df['hit_by_pitch'].mean()
-		hr_ytd_avg = filtered_df['home_run'].mean()
-		single_ytd_avg = filtered_df['single'].mean()
-		double_ytd_avg = filtered_df['double'].mean()
-		triple_ytd_avg = filtered_df['triple'].mean()
-		walk_ytd_avg = filtered_df['walk'].mean()
-		fds_ytd_avg = filtered_df['fd_score'].mean()
-
-		return pd.Series([hbp_ytd_avg, hr_ytd_avg, single_ytd_avg, double_ytd_avg, triple_ytd_avg, walk_ytd_avg, fds_ytd_avg], index=['hbp_ytd_avg','hr_ytd_avg', 'single_ytd_avg', 'double_ytd_avg', 'triple_ytd_avg', 'walk_ytd_avg', 'fds_ytd_avg'])
 
 	#some utility functions for cleaning up the raw BBRef data.  They could be nicer, but they work for now.
 	def parse_bbref_batter_df(self, df):
@@ -489,6 +478,30 @@ class DatabaseHelper(object):
 			print("Couldn't find the baseball stadium csv - should be called 'baseball_key_joiner.csv")
 
 		return df
+
+	def combine_scraped_data(self, path2018, path2017, write_csv=False):
+		'''This function is a utility function that combines the multiple scraped data files we have.  We have saved the datasets to a CSV, but if we ever need to recreate them, 
+		we can use this'''
+
+		#get the separate datasets from hardcoded locations
+		batting_df_2017, pitching_df_2017 = self.pull_raw_bbref_data(filepath=path2017)
+
+		batting_df_2018, pitching_df_2018 = self.pull_raw_bbref_data(filepath=path2018)
+
+		#2018 data contained some old data from other years, vice versa for 2017.  make sure each is cleaned to the appropriate year
+		batting_df_2018 = batting_df_2018[batting_df_2018['year'] == 2018.0]
+		pitching_df_2018 = pitching_df_2018[pitching_df_2018['year'] == 2018.0]
+		batting_df_2017 = batting_df_2017[batting_df_2017['year'] < 2018.0]
+		pitching_df_2017 = pitching_df_2017[pitching_df_2017['year'] < 2018.0]
+
+		batting_df = pd.concat([batting_df_2017, batting_df_2018])
+		pitching_df = pd.concat([pitching_df_2017, pitching_df_2018])
+
+		if write_csv:
+			batting_df.to_csv("batting_df_master.csv", index=False, header=True)
+			pitching_df.to_csv("pitching_df_master.csv", index=False, header=True)
+
+		return batting_df, pitching_df
 
 	def create_player_lookup_csv(self):
 		"""

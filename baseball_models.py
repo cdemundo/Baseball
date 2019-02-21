@@ -2,14 +2,14 @@ import pandas as pd
 import numpy as np
 from sklearn.model_selection import TimeSeriesSplit
 
-class BaseballModelSelection(object):
+class BaseballPipeline(object):
 	'''
 		This class has functions that are similar to custom versions of sklearn.model_selection functions
 	'''
 	#def __init__(self):
 
 
-	def train_test_split(self, df, num_splits = 0):
+	def train_test_split(self, X, y, num_splits = 2):
 		'''
 			This function should be called on any data we are using to split it before we do anything into training, development and test data. 
 			
@@ -33,19 +33,7 @@ class BaseballModelSelection(object):
 		'''
 
 		#check to make sure input is the right type
-		assert isinstance(df, pd.DataFrame), 'Input should be a Pandas DataFrame'
-
-		#drop any data in the holdout timeframe
-		valid_df = df[df['game_date'] < '2018-08-01']
-
-		assert valid_df['game_date'].max().strftime('%Y-%m-%d') < '2018-08-01'
-
-		try: 
-			y = valid_df['fd_score']
-			X = valid_df.drop('fd_score', axis=1)
-		except KeyError:
-			print('fd_score column does not exist!')
-			return ""
+		assert isinstance(X, pd.DataFrame), 'X should be a Pandas DataFrame'
 
 		if num_splits == 0:
 			num_splits = len(X) - 1
@@ -125,4 +113,107 @@ class MovingAverageModel(object):
 			return self.y.mean()
 		else:
 			return val
+
+
+import time
+
+class FeatureEngineering(object):
+    '''This is a class to consolidate feature engineering functions in one spot.'''
+    
+    #def __init__(self):
+            
+    def offset_avgs(self, df, moving=True, num_days=5, offset=1, ytd=True, lifetime=False, verbose=False):
+        '''
+        Returns the offset moving average for numeric columns in a dataframe.  Assumes that all numeric columns passed can be turned into an average!
+
+        Parameters
+        ------------
+        df : dataframe 
+            A pandas dataframe with at least one numeric column
+        num_dats : int
+            The window size to use for the rolling average
+        offset : int
+            The number of days from the current to offset the rolling average.  Minimum has to be 1 - we do not want to include the current day in the average
+
+        Returns
+        -------------
+        df : the original dataframe with the new rows added
+        '''
+                    
+        #there is a way to speed this up I think - for when I have time to consider.  applying rolling to entire groupby object, not just columns
+        #https://stackoverflow.com/questions/49590013/speed-up-rolling-window-in-pandas
+        ytd_time = 0
+        moving_time = 0
+
+        #select only the numeric cols, excluding the year
+        num_cols = list(df.select_dtypes(include=np.number).drop('year', axis=1).columns.values)
+
+        if len(num_cols) > 1:
+            #groupby including the game date so we are sorted by game order
+            try:
+                avg_df = df.groupby(['player', 'year', 'game_date', 'game_id'])[num_cols].max().reset_index()
+            except KeyError:
+                print("Expected to find ['player', 'year', 'game_date', 'game_id'] as columns in the dataframe.")
+                return ""
+
+            groups = avg_df.groupby(['year', 'player'])
+
+            #for every numeric column, calculate the offset moving average
+            new_cols = []
+            print("Calculating averages!")
+            for col in num_cols:
+            	if col != 'fd_score':
+	                if moving:
+	                    start = time.time()
+	                    if verbose:
+	                    	print("Calculating moving avg for " + str(col))
+	                    col_name = col + '_' + str(num_days) + 'dayavg'
+	                    new_cols.append(col_name)
+
+	                    avg_df[col_name] = groups[col].apply(lambda x: x.rolling(num_days, 1).mean().shift().bfill()).reset_index()[col]
+
+	                    #the first value for each player should not contain information about the current day.  reset it to
+	                    avg_df.loc[avg_df2.groupby('player')[col_name].head(1).index, col_name] = avg_df[col_name].mean()
+	                
+	                    moving_time += time.time()-start
+	                
+	                if ytd:
+	                    start = time.time()
+	                    
+	                    if verbose: 
+	                    	print("Calculating ytd avg for " + str(col))
+	                    col_name = col + '_ytdavg'
+	                    new_cols.append(col_name)
+	                    
+	                    #expanding applies an infinite window size of length n, where n is the position of the current row in the groupby object
+	                    #shift moves all the results up by 1.  so for a given row, this value will be "the YTD avg from the preceding day"
+	                    #if it is the first game of the season, YTD will equal = YTD from previous year
+	                    avg_df[col_name] = groups[col].expanding().mean().shift().values
+
+	                    #same logic as above - first day should not contain information about the current day
+	                    avg_df.loc[avg_df2.groupby('player')[col_name].head(1).index, col_name] = avg_df[col_name].mean()
+	                    
+	                    ytd_time += time.time()-start
+	                    
+	                ## FIGURE OUT LIFETIME AVG  !!!!!                  
+	                if lifetime: 
+	                    print("Calculating ytd avg for " + str(col))
+	                    col_name = col + '_ytdavg'
+	                    avg_df[col_name] = avg_df.groupby(['player', 'year'])[col].expanding().mean().values
+
+            #the columns we will merge back on
+            new_cols.append('game_id')
+            
+            if verbose: 
+            	print("YTD TIME: ", ytd_time)
+            	print("MOV TIME: ", moving_time)
+
+            print("Done calculating averages!")
+            #we just return the moving averages - we don't want any of the other info as features as it's all information about the same day
+            return avg_df[new_cols], avg_df['fd_score']
+
+        else:
+            print("No numeric columns were found in the dataframe!")
+            return ""
+    
 
