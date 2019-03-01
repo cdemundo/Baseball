@@ -352,7 +352,7 @@ class DatabaseHelper(object):
 		batter_dataframe_final = batting_df.merge(statcast_data, how='left', left_on='game_id', right_on='game_id')
 		batter_dataframe_final.drop(columns=['home_team_y', 'game_date_y'], inplace=True)
 		batter_dataframe_final.rename(columns={"home_team_x": "home_team", "game_date_x" : "game_date"}, inplace=True)
-		batter_dataframe_final = batter_dataframe_final.dropna()
+		#batter_dataframe_final = batter_dataframe_final.dropna()
 
 		# Score game performance
 		batter_dataframe_final['fd_score'] = batter_dataframe_final.apply(self.fd_batting_score, axis=1)
@@ -509,7 +509,7 @@ class DatabaseHelper(object):
 		the raw database
 
 		"""
-		raw_data = self.dh.pull_raw_data()
+		raw_data = self.pull_raw_data()
 
 		batter_ids = set(raw_data.batter.unique())
 		pitcher_ids = set(raw_data.pitcher.unique())

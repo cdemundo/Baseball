@@ -1,18 +1,17 @@
 import pandas as pd
 import numpy as np
+import shap
 from sklearn.model_selection import TimeSeriesSplit
+from sklearn.metrics import mean_absolute_error
+import time
+import datetime
 
-class BaseballPipeline(object):
-	'''
-		This class has functions that are similar to custom versions of sklearn.model_selection functions
-	'''
-	#def __init__(self):
-
-
+class CrossValidator(object):
+	
 	def train_test_split(self, X, y, num_splits = 2):
 		'''
 			This function should be called on any data we are using to split it before we do anything into training, development and test data. 
-			
+
 			We will ALWAYS reserve the last 2 months of data (Aug-Sept of 2018) as final test data
 
 			We will apply 'walk-along' cross-fold validation for the rest of the data
@@ -45,6 +44,121 @@ class BaseballPipeline(object):
 		tscv = TimeSeriesSplit(n_splits=num_splits)
 
 		return X, y, tscv
+
+
+	def clean_for_model(self, X, new_features=[], batting=False, pitching=False):
+		'''
+		The goal of this function is to clean model input - reduce the number of features to only ones that we have identified
+		are good
+
+		I am manually maintaining this list as it is the result of feature engineering.  We have logged a history of all model training for posterity
+
+		Parameters
+		-----------------
+			X : pandas dataframe
+				observations in each row and features as columns
+			new_features : list
+				list of new features we are evaluating
+			batting : bool
+				flag for working on batting model
+			pitching: bool
+				flag for working on pitching model
+
+		Returns
+		-------------------
+			X : pandas dataframe
+				dataframe limited to known good features and new columns
+		'''
+		if batting == True:
+			#note - game_id isn't a feature, but we remove it in the cross-validation stage
+			known_good_batting_features = ['game_id','PA_ytdavg', 'home_run_ytdavg', 'PA_14dayavg', 'RBI_ytdavg', 'slugging_perc_7dayavg', 'slugging_perc_14dayavg', 'pitches_ytdavg', 'single_ytdavg', 'PA_21dayavg', 'strikes_total_ytdavg']
+			if len(new_features) > 0:
+				features_to_keep = list(set(known_good_batting_features).union(set(new_features)))
+				return X[features_to_keep]
+			else:
+				return X[known_good_batting_features]
+
+		elif pitching == True:
+			known_good_pitching_features = ['game_id']
+			if len(new_features) > 0:
+				features_to_keep = list(set(known_good_pitching_features).union(set(new_features)))
+				return X[features_to_keep]
+			else:
+				return X[known_good_pitching_features]
+
+		else:
+			print("Either batting or pitching flag must be true!")
+			return ''
+
+	def cross_validate(self, X, y, tscv, model, fillna=False):
+		i = 0
+		self.test_maes = []
+		self.train_maes = []
+		for train_index, test_index in tscv.split(X):
+			start = time.time()
+			print("Running iter: " + str(i+1))
+			self.X_train, self.X_test = X.iloc[train_index], X.iloc[test_index]
+			self.y_train, self.y_test = y.iloc[train_index], y.iloc[test_index]
+
+			#some models, like XGBoost handle nas, others don't.  Fill NAs if flag is set
+			if fillna == True:
+				X_train.fillna(0, inplace=True)
+				X_test.fillna(0, inplace=True)
+
+			#remove the ids so we can link them back up to predictions later
+			self.X_train_ids = self.X_train['game_id']
+			self.X_train = self.X_train.drop('game_id', axis=1)
+
+			#train the model
+			self.model = model.fit(self.X_train, self.y_train)
+
+			#same procedure - remove test ids
+			self.X_test_ids = self.X_test['game_id']
+			self.X_test = self.X_test.drop('game_id', axis=1)
+
+			#run predictions using trained model
+			self.train_preds = self.model.predict(self.X_train)
+			self.test_preds = self.model.predict(self.X_test)
+
+			#record the results
+			self.train_maes.append(mean_absolute_error(self.y_train, self.train_preds))
+			self.test_maes.append(mean_absolute_error(self.y_test, self.test_preds))
+			print("Iter " + str(i+1) + " took " + str(time.time()-start) + " seconds.")
+			i += 1
+		#if we are at the last iteration, lets return the predicted values from the test set so we can 
+		#put them into the optimizer
+		self.id_preds = list(zip(self.test_preds, self.X_test_ids))
+
+	def log_model(self, notes=""):
+		'''
+		The goal of this is to log a model stored in the current instance of the object
+		'''
+		#calculate SHAP values to report most important features
+		explainer = shap.TreeExplainer(self.model)
+		shap_values = explainer.shap_values(self.X_train)
+
+		#sum magnitude of SHAP values along columns (features)
+		shap_sums = pd.DataFrame(np.abs(shap_values), columns = self.X_train.columns).sum(axis=0).sort_values(ascending=False)
+		shap_sums = list(shap_sums.index[0:10].values)
+
+		#create a dataframe to write results to csv
+		results = pd.DataFrame([np.mean(self.train_maes)], columns = ['avg_train_MAE'])
+
+		results['avg_test_MAE'] = np.mean(self.test_maes)
+		results['params'] = str(self.model.get_params())
+		results['features'] = str(list(self.X_train.columns.values))
+		results['top_SHAP'] = str(shap_sums)
+
+		results['min_train_date'] = self.X_train_ids.sort_values().iloc[0]
+		results['max_train_date'] = self.X_train_ids.sort_values().iloc[len(self.X_train_ids)-1]
+
+		#allow capturing descriptive notes
+		if len(notes)>0:
+			results['notes'] = notes
+
+		results['date_trained'] = str(datetime.datetime.now().strftime("%Y-%m-%d"))
+
+		results.to_csv("logged_results.csv", mode='a', header=False, index=False)
 
 class MovingAverageModel(object):
 	#def __init__(self):
@@ -114,106 +228,92 @@ class MovingAverageModel(object):
 		else:
 			return val
 
+class FeatureEngineer(object):
+	
+	def __init__(self,df):
+		if len(df) == 0:
+			print("Need to pass a dataframe to engineer on initializing!")
+			return ""
+		#select only the numeric cols, excluding the year
+		self.num_cols = list(df.select_dtypes(include=np.number).drop('year', axis=1).columns.values)
+		
+		#for calculating averages, we want a df sorted by player and date
+		self.avg_df = df.sort_values(['player', 'game_date'])
+		
+	def calc_lifetime_avg(self):
+		
+		return_df = self.avg_df.copy()
+		
+		new_cols = ['game_id']
+		
+		for col in self.num_cols:
+			if col != 'fd_score':
+				
+				newcol = col+'_lifeavg'
+				
+				#we group by player and date and calc expanded mean. we shift down by one to make sure no current day info is included
+				return_df[newcol] = return_df.sort_values(['player', 'game_date']).groupby(['player'])[col].expanding().mean().shift().values
+				#set the first value for each player to NaN since we wouldnt have data for it
+				return_df.loc[return_df.groupby(['player'])[newcol].head(1).index, newcol] = np.NaN
+				
+				new_cols.append(newcol)
 
-import time
+		#we return just the game_id and the new columns created.  These can be merged with other features created before going to the model
+		return return_df[new_cols]
 
-class FeatureEngineering(object):
-    '''This is a class to consolidate feature engineering functions in one spot.'''
-    
-    #def __init__(self):
-            
-    def offset_avgs(self, df, moving=True, num_days=5, offset=1, ytd=True, lifetime=False, verbose=False):
-        '''
-        Returns the offset moving average for numeric columns in a dataframe.  Assumes that all numeric columns passed can be turned into an average!
+	def calc_rolling_avg(self):
+	
+		return_df = self.avg_df.copy()
+		
+		#we need to figure out if these are pitching averages or batting averages - different timeframes are relevant
+		try:
+			return_df['IP']
+			avgs = [2,3,5,10,15]
+		except KeyError:
+			#1-4 week and 6 week
+			avgs = [7,14,21,28,42]
+		
+		new_cols = ['game_id']
+		
+		for col in self.num_cols:
+			if col != 'fd_score':
+				for avg in avgs:
+					
+					newcol = col + '_' + str(avg) + 'dayavg'
+			   
+					#we group by player and date and calc expanded mean. we shift down by one to make sure no current day info is included
+					return_df[newcol] = return_df.sort_values(['player', 'game_date']).groupby(['player'])[col].rolling(avg,avg).mean().shift().values
+					#set the first value for each player to NaN since we wouldnt have data for it
+					return_df.loc[return_df.groupby(['player'])[newcol].head(1).index, newcol] = np.NaN
 
-        Parameters
-        ------------
-        df : dataframe 
-            A pandas dataframe with at least one numeric column
-        num_dats : int
-            The window size to use for the rolling average
-        offset : int
-            The number of days from the current to offset the rolling average.  Minimum has to be 1 - we do not want to include the current day in the average
+					new_cols.append(newcol)
 
-        Returns
-        -------------
-        df : the original dataframe with the new rows added
-        '''
-                    
-        #there is a way to speed this up I think - for when I have time to consider.  applying rolling to entire groupby object, not just columns
-        #https://stackoverflow.com/questions/49590013/speed-up-rolling-window-in-pandas
-        ytd_time = 0
-        moving_time = 0
+		#we return just the game_id and the new columns created.  These can be merged with other features created before going to the model
+		return return_df[new_cols]
+	
+	def calc_ytd_avgs(self):
+	
+		return_df = self.avg_df.copy()  
+		
+		#since it's YTD, we want to make sure we sort by year as well
+		return_df = return_df.sort_values(['player', 'year', 'game_date'])
+	  
+		new_cols = ['game_id']
+		
+		for col in self.num_cols:
+			if col != 'fd_score':                   
+				newcol = col+'_ytdavg'
 
-        #select only the numeric cols, excluding the year
-        num_cols = list(df.select_dtypes(include=np.number).drop('year', axis=1).columns.values)
+				#we group by player and year and calc expanded mean. we shift down by one to make sure no current day info is included
+				return_df[newcol] = return_df.groupby(['player', 'year'])[[col]].expanding().mean().shift().values
+				#set the first value for each player to NaN since we wouldnt have data for it
+				return_df.loc[return_df.groupby(['player'])[newcol].head(1).index, newcol] = np.NaN
 
-        if len(num_cols) > 1:
-            #groupby including the game date so we are sorted by game order
-            try:
-                avg_df = df.groupby(['player', 'year', 'game_date', 'game_id'])[num_cols].max().reset_index()
-            except KeyError:
-                print("Expected to find ['player', 'year', 'game_date', 'game_id'] as columns in the dataframe.")
-                return ""
+				new_cols.append(newcol)
 
-            groups = avg_df.groupby(['year', 'player'])
+		#we return just the game_id and the new columns created.  These can be merged with other features created before going to the model
+		return return_df[new_cols]
+	
 
-            #for every numeric column, calculate the offset moving average
-            new_cols = []
-            print("Calculating averages!")
-            for col in num_cols:
-            	if col != 'fd_score':
-	                if moving:
-	                    start = time.time()
-	                    if verbose:
-	                    	print("Calculating moving avg for " + str(col))
-	                    col_name = col + '_' + str(num_days) + 'dayavg'
-	                    new_cols.append(col_name)
-
-	                    avg_df[col_name] = groups[col].apply(lambda x: x.rolling(num_days, 1).mean().shift().bfill()).reset_index()[col]
-
-	                    #the first value for each player should not contain information about the current day.  reset it to
-	                    avg_df.loc[avg_df2.groupby('player')[col_name].head(1).index, col_name] = avg_df[col_name].mean()
-	                
-	                    moving_time += time.time()-start
-	                
-	                if ytd:
-	                    start = time.time()
-	                    
-	                    if verbose: 
-	                    	print("Calculating ytd avg for " + str(col))
-	                    col_name = col + '_ytdavg'
-	                    new_cols.append(col_name)
-	                    
-	                    #expanding applies an infinite window size of length n, where n is the position of the current row in the groupby object
-	                    #shift moves all the results up by 1.  so for a given row, this value will be "the YTD avg from the preceding day"
-	                    #if it is the first game of the season, YTD will equal = YTD from previous year
-	                    avg_df[col_name] = groups[col].expanding().mean().shift().values
-
-	                    #same logic as above - first day should not contain information about the current day
-	                    avg_df.loc[avg_df2.groupby('player')[col_name].head(1).index, col_name] = avg_df[col_name].mean()
-	                    
-	                    ytd_time += time.time()-start
-	                    
-	                ## FIGURE OUT LIFETIME AVG  !!!!!                  
-	                if lifetime: 
-	                    print("Calculating ytd avg for " + str(col))
-	                    col_name = col + '_ytdavg'
-	                    avg_df[col_name] = avg_df.groupby(['player', 'year'])[col].expanding().mean().values
-
-            #the columns we will merge back on
-            new_cols.append('game_id')
-            
-            if verbose: 
-            	print("YTD TIME: ", ytd_time)
-            	print("MOV TIME: ", moving_time)
-
-            print("Done calculating averages!")
-            #we just return the moving averages - we don't want any of the other info as features as it's all information about the same day
-            return avg_df[new_cols], avg_df['fd_score']
-
-        else:
-            print("No numeric columns were found in the dataframe!")
-            return ""
-    
+	
 
