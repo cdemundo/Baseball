@@ -2,6 +2,7 @@ import sqlite3
 import pandas as pd
 import datetime
 import math
+import numpy as np
 
 from pybaseball import playerid_reverse_lookup
 
@@ -368,6 +369,15 @@ class DatabaseHelper(object):
 		batter_dataframe_final['fd_score'] = batter_dataframe_final.apply(self.fd_batting_score, axis=1)
 
 		batter_dataframe_final = batter_dataframe_final[ (batter_dataframe_final['game_date'] < end_date) & (batter_dataframe_final['game_date'] > start_date)]
+
+		# NAN values after the bbref-statcast join a lack of value for an in game event.  A player
+		# who has at lease 1 AT BAT in a game, but fails to generate a FD scoring event, returns a NAN
+		# This NAN should be a zero, since the player scored zero FD points
+		batter_dataframe_final[['hit_by_pitch', 'home_run', 'single', 'double', 'triple']] = batter_dataframe_final[['hit_by_pitch', 'home_run', 'single', 'double', 'triple']].fillna(value=0)
+
+		# Take walk values from BB if 'walk' value is not filled due to failure to join between
+		# statcast and bbref
+		batter_dataframe_final['walk'] = np.where(batter_dataframe_final['walk'].isnull(), batter_dataframe_final['BB'], batter_dataframe_final['walk'])
 
 		print("Batting FD Score calculated! Returning data..")
 		return batter_dataframe_final
