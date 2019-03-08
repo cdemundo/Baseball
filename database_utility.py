@@ -1,6 +1,7 @@
 import sqlite3
 import pandas as pd
 import datetime
+import math
 
 from pybaseball import playerid_reverse_lookup
 
@@ -40,7 +41,7 @@ class DatabaseHelper(object):
 				return
 		else:
 			#the first date in the database as of 1/19/2019
-			start_date = '2015-04-05'
+			start_date = '2015-04-01'
 
 		if len(end_date) > 0:
 			try:
@@ -50,7 +51,7 @@ class DatabaseHelper(object):
 				return
 		else:
 			#the last date in the database as of 1/19/2019
-			end_date = '2018-10-28'
+			end_date = '2018-07-31'
 
 		#open a connection to the sqlite file
 		conn = sqlite3.connect(self.filepath)
@@ -165,6 +166,9 @@ class DatabaseHelper(object):
 		batting_df.drop_duplicates(inplace=True)
 		pitching_df.drop_duplicates(inplace=True)
 
+		#Drop values where "At Bats" == 0 - backup pitchers!
+		batting_df = batting_df[ (batting_df['AB'] != 0.0) ]
+
 		#finally we want to remove any data from the validation period
 		#pitching_df = pitching_df[pitching_df['game_date'] < '2018-08-01']
 		#batting_df = batting_df[batting_df['game_date'] < '2018-08-01']
@@ -229,7 +233,7 @@ class DatabaseHelper(object):
 
 		#find the quality starts using boolean filters
 		qual_start_df = pitching_df[(pitching_df['ER'] <= 3) & (pitching_df['is_first_pitcher'] == 1) & (pitching_df['IP'] >= 6)]
-		
+
 		#qual_start_df['quality_start'] = 1
 		qual_start_df.insert(0, 'quality_start', 1)
 		#take only the columns we need
@@ -276,7 +280,7 @@ class DatabaseHelper(object):
 
 		return ip_pts+so_pts+er_pts+win_pts+qual_start_pts
 
-	def calc_batting_fd_score(self, start_date='2018-05-01', end_date='2018-10-31', preload=True):
+	def calc_batting_fd_score(self, start_date='2018-04-01', end_date='2018-07-19', preload=True):
 		# PART 1 - get bbref data
 		# Inputs:
 		# start_date - beginning of time to pull statcast data
@@ -295,8 +299,14 @@ class DatabaseHelper(object):
 		batting_df, pitching_df = self.load_data(preload=preload)
 
 		# PART 2 - get statcast data
-		print("Getting raw statcast data...")
-		statcast_input_frame = self.pull_raw_statcast_data(start_date=start_date, end_date=end_date)
+		try:
+			statcast_input_frame = pd.read_csv('statcast_cache.csv')
+			print("Accessing statcast_cache...")
+			print("If dates are missing try rebuilding cache...")
+		except:
+			print("Getting raw statcast data...")
+			statcast_input_frame = self.pull_raw_statcast_data(start_date=start_date, end_date=end_date)
+			statcast_input_frame.to_csv('statcast_cache.csv')
 
 		events_worth_points = ['single', 'double', 'triple', 'walk', 'hit_by_pitch', 'home_run', 'hit_by_pitch']
 		statcast_df = statcast_input_frame[ statcast_input_frame['events'].isin(events_worth_points) ]
@@ -357,23 +367,39 @@ class DatabaseHelper(object):
 		# Score game performance
 		batter_dataframe_final['fd_score'] = batter_dataframe_final.apply(self.fd_batting_score, axis=1)
 
+		batter_dataframe_final = batter_dataframe_final[ (batter_dataframe_final['game_date'] < end_date) & (batter_dataframe_final['game_date'] > start_date)]
+
 		print("Batting FD Score calculated! Returning data..")
 		return batter_dataframe_final
 
 	def fd_batting_score(self, row):
-		x = 0
-		# Does data capture the following scenario:
-		# 1 x HR = 12pts + 3.2pts <- is this how fanduel works?
-		x = x + float(row['RBI']) * 3.5
-		x = x + float(row['R']) * 3.2
-		x = x + float(row['BB']) * 3
-		x = x + row['single'] * 3
-		x = x + row['double'] * 6
-		x = x + row['triple'] * 9
-		x = x + row['home_run'] * 12
-		x = x + row['hit_by_pitch'] * 3
 
-		return x
+		# Null batter indicates a misalignment with bbref and statcast
+		if math.isnan(row['batter']):
+			# This returns 0 for AT BATs that result in strikeouts, flyouts, and nonscoring events
+			if (row['H'] == 0) and (row['RBI'] == 0) and row['BB'] == 0:
+				return 0
+			# This returns scoring values under specific conditions that dont not involving batting
+			else:
+				y = 0
+				y = y + float(row['RBI']) * 3.5
+				y = y + float(row['R']) * 3.2
+				y = y + float(row['BB']) * 3
+				return y
+		else:
+			x = 0
+			# Does data capture the following scenario:
+			# 1 x HR = 12pts + 3.2pts <- is this how fanduel works?
+			x = x + float(row['RBI']) * 3.5
+			x = x + float(row['R']) * 3.2
+			x = x + float(row['BB']) * 3
+			x = x + row['single'] * 3
+			x = x + row['double'] * 6
+			x = x + row['triple'] * 9
+			x = x + row['home_run'] * 12
+			x = x + row['hit_by_pitch'] * 3
+
+			return x
 
 	#some utility functions for cleaning up the raw BBRef data.  They could be nicer, but they work for now.
 	def parse_bbref_batter_df(self, df):
@@ -480,7 +506,7 @@ class DatabaseHelper(object):
 		return df
 
 	def combine_scraped_data(self, path2018, path2017, write_csv=False):
-		'''This function is a utility function that combines the multiple scraped data files we have.  We have saved the datasets to a CSV, but if we ever need to recreate them, 
+		'''This function is a utility function that combines the multiple scraped data files we have.  We have saved the datasets to a CSV, but if we ever need to recreate them,
 		we can use this'''
 
 		#get the separate datasets from hardcoded locations
@@ -509,7 +535,7 @@ class DatabaseHelper(object):
 		the raw database
 
 		"""
-		raw_data = self.pull_raw_data()
+		raw_data = self.dh.pull_raw_statcast_data()
 
 		batter_ids = set(raw_data.batter.unique())
 		pitcher_ids = set(raw_data.pitcher.unique())
