@@ -515,29 +515,43 @@ class DatabaseHelper(object):
 
 		return df
 
-	def combine_scraped_data(self, path2018, path2017, write_csv=False):
-		'''This function is a utility function that combines the multiple scraped data files we have.  We have saved the datasets to a CSV, but if we ever need to recreate them,
-		we can use this'''
+	def combine_scraped_data(self, path2018, path2017, write_csv=False, verbose=False):
+			'''This function is a utility function that combines the multiple scraped data files we have.  We have saved the datasets to a CSV, but if we ever need to recreate them''' 
+			#get the separate datasets from hardcoded locations
+			batting_df_2017, pitching_df_2017 = self.pull_raw_bbref_data(filepath=path2017)
 
-		#get the separate datasets from hardcoded locations
-		batting_df_2017, pitching_df_2017 = self.pull_raw_bbref_data(filepath=path2017)
+			if verbose:
+				print("Merges for combine_scraped_data")
+				print("--------------------------------")
+				print("Batting DF 2015-2017 shape: ", batting_df_2017.shape)
+				print("Pitching DF 2015-2017 shape: ", pitching_df_2017.shape)
 
-		batting_df_2018, pitching_df_2018 = self.pull_raw_bbref_data(filepath=path2018)
+			batting_df_2018, pitching_df_2018 = self.pull_raw_bbref_data(filepath=path2018)
 
-		#2018 data contained some old data from other years, vice versa for 2017.  make sure each is cleaned to the appropriate year
-		batting_df_2018 = batting_df_2018[batting_df_2018['year'] == 2018.0]
-		pitching_df_2018 = pitching_df_2018[pitching_df_2018['year'] == 2018.0]
-		batting_df_2017 = batting_df_2017[batting_df_2017['year'] < 2018.0]
-		pitching_df_2017 = pitching_df_2017[pitching_df_2017['year'] < 2018.0]
+			if verbose:
+				print("Batting DF 2018 shape: ", batting_df_2018.shape)
+				print("Pitching DF 2018 shape: ", pitching_df_2018.shape)
 
-		batting_df = pd.concat([batting_df_2017, batting_df_2018])
-		pitching_df = pd.concat([pitching_df_2017, pitching_df_2018])
+			#2018 data contained some old data from other years, vice versa for 2017.  make sure each is cleaned to the appropriate year
+			batting_df_2018 = batting_df_2018[batting_df_2018['year'] == 2018.0]
+			pitching_df_2018 = pitching_df_2018[pitching_df_2018['year'] == 2018.0]
+			batting_df_2017 = batting_df_2017[batting_df_2017['year'] < 2018.0]
+			pitching_df_2017 = pitching_df_2017[pitching_df_2017['year'] < 2018.0]
 
-		if write_csv:
-			batting_df.to_csv("batting_df_master.csv", index=False, header=True)
-			pitching_df.to_csv("pitching_df_master.csv", index=False, header=True)
+			batting_df = pd.concat([batting_df_2017, batting_df_2018])
+			pitching_df = pd.concat([pitching_df_2017, pitching_df_2018])
 
-		return batting_df, pitching_df
+			if verbose:
+				print("Batting DF after concat: \n")
+				print(batting_df.year.value_counts())
+				print("Pitching DF after concat: \n")
+				print(pitching_df.year.value_counts())
+
+			if write_csv:
+				batting_df.to_csv("batting_df_master.csv", index=False, header=True)
+				pitching_df.to_csv("pitching_df_master.csv", index=False, header=True)
+
+			return batting_df, pitching_df
 
 	def create_player_lookup_csv(self):
 		"""
