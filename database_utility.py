@@ -281,7 +281,7 @@ class DatabaseHelper(object):
 
 		return ip_pts+so_pts+er_pts+win_pts+qual_start_pts
 
-	def calc_batting_fd_score(self, start_date='2018-04-01', end_date='2018-07-19', preload=True):
+	def calc_batting_fd_score(self, start_date='2015-04-01', end_date='2018-07-19', preload=True):
 		# PART 1 - get bbref data
 		# Inputs:
 		# start_date - beginning of time to pull statcast data
@@ -368,12 +368,12 @@ class DatabaseHelper(object):
 		# Score game performance
 		batter_dataframe_final['fd_score'] = batter_dataframe_final.apply(self.fd_batting_score, axis=1)
 
-		batter_dataframe_final = batter_dataframe_final[ (batter_dataframe_final['game_date'] < end_date) & (batter_dataframe_final['game_date'] > start_date)]
-
 		# NAN values after the bbref-statcast join a lack of value for an in game event.  A player
 		# who has at lease 1 AT BAT in a game, but fails to generate a FD scoring event, returns a NAN
 		# This NAN should be a zero, since the player scored zero FD points
 		batter_dataframe_final[['hit_by_pitch', 'home_run', 'single', 'double', 'triple']] = batter_dataframe_final[['hit_by_pitch', 'home_run', 'single', 'double', 'triple']].fillna(value=0)
+
+		batter_dataframe_final = batter_dataframe_final[ (batter_dataframe_final['game_date'] < end_date) & (batter_dataframe_final['game_date'] > start_date)]
 
 		# Take walk values from BB if 'walk' value is not filled due to failure to join between
 		# statcast and bbref
@@ -516,7 +516,7 @@ class DatabaseHelper(object):
 		return df
 
 	def combine_scraped_data(self, path2018, path2017, write_csv=False, verbose=False):
-			'''This function is a utility function that combines the multiple scraped data files we have.  We have saved the datasets to a CSV, but if we ever need to recreate them''' 
+			'''This function is a utility function that combines the multiple scraped data files we have.  We have saved the datasets to a CSV, but if we ever need to recreate them'''
 			#get the separate datasets from hardcoded locations
 			batting_df_2017, pitching_df_2017 = self.pull_raw_bbref_data(filepath=path2017)
 
