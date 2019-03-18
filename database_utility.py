@@ -499,11 +499,15 @@ class DatabaseHelper(object):
 		return df
 
 	def combine_scraped_data(self, path2018, path2017, write_csv=False, verbose=False):
-		'''This function is a utility function that combines the multiple scraped data files we have.  We have saved the datasets to a CSV, but if we ever need to recreate them, 
-		we can use this'''
-
+		'''This function is a utility function that combines the multiple scraped data files we have.  We have saved the datasets to a CSV, but if we ever need to recreate them'''
 		#get the separate datasets from hardcoded locations
 		batting_df_2017, pitching_df_2017 = self.pull_raw_bbref_data(filepath=path2017)
+
+		if verbose:
+			print("Merges for combine_scraped_data")
+			print("--------------------------------")
+			print("Batting DF 2015-2017 shape: ", batting_df_2017.shape)
+			print("Pitching DF 2015-2017 shape: ", pitching_df_2017.shape)
 
 		batting_df_2018, pitching_df_2018 = self.pull_raw_bbref_data(filepath=path2018)
 
