@@ -1,8 +1,7 @@
 import sqlite3
 import pandas as pd
-import datetime
-import math
 import numpy as np
+import datetime
 
 from pybaseball import playerid_reverse_lookup
 
@@ -42,7 +41,7 @@ class DatabaseHelper(object):
 				return
 		else:
 			#the first date in the database as of 1/19/2019
-			start_date = '2015-04-01'
+			start_date = '2015-04-05'
 
 		if len(end_date) > 0:
 			try:
@@ -52,7 +51,7 @@ class DatabaseHelper(object):
 				return
 		else:
 			#the last date in the database as of 1/19/2019
-			end_date = '2018-07-31'
+			end_date = '2018-10-28'
 
 		#open a connection to the sqlite file
 		conn = sqlite3.connect(self.filepath)
@@ -73,7 +72,7 @@ class DatabaseHelper(object):
 
 		return raw_data
 
-	def load_data(self, preload=True, path2018="", path2017="", write_csv=False):
+	def load_data(self, preload=True, path2018="", path2017="", write_csv=False, verbose=False):
 		'''
 		Utility function - load data from CSV if CSVs exist. If not, get raw data from .jl files.
 		'''
@@ -88,12 +87,11 @@ class DatabaseHelper(object):
 				print("Couldn't find the files raw_batting_df.csv and raw_pitching_df.csv in the current directory.")
 				return ""
 		else:
-			print("Reading in data..")
 			if (len(path2017) == 0) or (len(path2018) == 0):
 				print("To load raw data, you must pass the path to bbref.jl and bbref_2018.jl")
 				return ""
 			else:
-				batting_df, pitching_df = self.combine_scraped_data(path2017=path2017, path2018=path2018, write_csv = write_csv)
+				batting_df, pitching_df = self.combine_scraped_data(path2017=path2017, path2018=path2018, write_csv = write_csv, verbose=verbose)
 
 		return batting_df, pitching_df
 
@@ -177,11 +175,11 @@ class DatabaseHelper(object):
 		print("Raw data returned!")
 		return batting_df, pitching_df
 
-	def calc_pitching_fd_score(self, preload = True):
+	def calc_pitching_fd_score(self, preload = True, path2017="", path2018="", write_csv=False):
 		'''
 		We need to add in some columns and do some cleaning to calculate the Pitching specific FD score
 		'''
-		batting_df, pitching_df = self.load_data()
+		batting_df, pitching_df = self.load_data(preload, path2017, path2018, write_csv)
 
 		print("Calculating FanDuel pitching score...")
 
@@ -234,7 +232,7 @@ class DatabaseHelper(object):
 
 		#find the quality starts using boolean filters
 		qual_start_df = pitching_df[(pitching_df['ER'] <= 3) & (pitching_df['is_first_pitcher'] == 1) & (pitching_df['IP'] >= 6)]
-
+		
 		#qual_start_df['quality_start'] = 1
 		qual_start_df.insert(0, 'quality_start', 1)
 		#take only the columns we need
@@ -251,10 +249,9 @@ class DatabaseHelper(object):
 		pitching_df['fd_score'] = pitching_df.apply(self.fd_pitching_score, axis=1)
 
 		#remove columns we don't need
-		pitching_df.drop(['quality_start', 'is_first_pitcher'], axis=1, inplace=True)
+		pitching_df.drop(['quality_start'], axis=1, inplace=True)
 
 		return pitching_df
-
 
 	def fd_pitching_score(self, row):
 		#IP are worth 3 points per completed inning
@@ -281,7 +278,7 @@ class DatabaseHelper(object):
 
 		return ip_pts+so_pts+er_pts+win_pts+qual_start_pts
 
-	def calc_batting_fd_score(self, start_date='2018-04-01', end_date='2018-07-19', preload=True):
+	def calc_batting_fd_score(self, start_date='2015-04-01', end_date='2018-07-19', preload=True):
 		# PART 1 - get bbref data
 		# Inputs:
 		# start_date - beginning of time to pull statcast data
@@ -368,12 +365,12 @@ class DatabaseHelper(object):
 		# Score game performance
 		batter_dataframe_final['fd_score'] = batter_dataframe_final.apply(self.fd_batting_score, axis=1)
 
-		batter_dataframe_final = batter_dataframe_final[ (batter_dataframe_final['game_date'] < end_date) & (batter_dataframe_final['game_date'] > start_date)]
-
 		# NAN values after the bbref-statcast join a lack of value for an in game event.  A player
 		# who has at lease 1 AT BAT in a game, but fails to generate a FD scoring event, returns a NAN
 		# This NAN should be a zero, since the player scored zero FD points
 		batter_dataframe_final[['hit_by_pitch', 'home_run', 'single', 'double', 'triple']] = batter_dataframe_final[['hit_by_pitch', 'home_run', 'single', 'double', 'triple']].fillna(value=0)
+
+		batter_dataframe_final = batter_dataframe_final[ (batter_dataframe_final['game_date'] < end_date) & (batter_dataframe_final['game_date'] > start_date)]
 
 		# Take walk values from BB if 'walk' value is not filled due to failure to join between
 		# statcast and bbref
@@ -383,33 +380,19 @@ class DatabaseHelper(object):
 		return batter_dataframe_final
 
 	def fd_batting_score(self, row):
+		x = 0
+		# Does data capture the following scenario:
+		# 1 x HR = 12pts + 3.2pts <- is this how fanduel works?
+		x = x + float(row['RBI']) * 3.5
+		x = x + float(row['R']) * 3.2
+		x = x + float(row['BB']) * 3
+		x = x + row['single'] * 3
+		x = x + row['double'] * 6
+		x = x + row['triple'] * 9
+		x = x + row['home_run'] * 12
+		x = x + row['hit_by_pitch'] * 3
 
-		# Null batter indicates a misalignment with bbref and statcast
-		if math.isnan(row['batter']):
-			# This returns 0 for AT BATs that result in strikeouts, flyouts, and nonscoring events
-			if (row['H'] == 0) and (row['RBI'] == 0) and row['BB'] == 0:
-				return 0
-			# This returns scoring values under specific conditions that dont not involving batting
-			else:
-				y = 0
-				y = y + float(row['RBI']) * 3.5
-				y = y + float(row['R']) * 3.2
-				y = y + float(row['BB']) * 3
-				return y
-		else:
-			x = 0
-			# Does data capture the following scenario:
-			# 1 x HR = 12pts + 3.2pts <- is this how fanduel works?
-			x = x + float(row['RBI']) * 3.5
-			x = x + float(row['R']) * 3.2
-			x = x + float(row['BB']) * 3
-			x = x + row['single'] * 3
-			x = x + row['double'] * 6
-			x = x + row['triple'] * 9
-			x = x + row['home_run'] * 12
-			x = x + row['hit_by_pitch'] * 3
-
-			return x
+		return x
 
 	#some utility functions for cleaning up the raw BBRef data.  They could be nicer, but they work for now.
 	def parse_bbref_batter_df(self, df):
@@ -516,42 +499,38 @@ class DatabaseHelper(object):
 		return df
 
 	def combine_scraped_data(self, path2018, path2017, write_csv=False, verbose=False):
-			'''This function is a utility function that combines the multiple scraped data files we have.  We have saved the datasets to a CSV, but if we ever need to recreate them''' 
-			#get the separate datasets from hardcoded locations
-			batting_df_2017, pitching_df_2017 = self.pull_raw_bbref_data(filepath=path2017)
+		'''This function is a utility function that combines the multiple scraped data files we have.  We have saved the datasets to a CSV, but if we ever need to recreate them, 
+		we can use this'''
 
-			if verbose:
-				print("Merges for combine_scraped_data")
-				print("--------------------------------")
-				print("Batting DF 2015-2017 shape: ", batting_df_2017.shape)
-				print("Pitching DF 2015-2017 shape: ", pitching_df_2017.shape)
+		#get the separate datasets from hardcoded locations
+		batting_df_2017, pitching_df_2017 = self.pull_raw_bbref_data(filepath=path2017)
 
-			batting_df_2018, pitching_df_2018 = self.pull_raw_bbref_data(filepath=path2018)
+		batting_df_2018, pitching_df_2018 = self.pull_raw_bbref_data(filepath=path2018)
 
-			if verbose:
-				print("Batting DF 2018 shape: ", batting_df_2018.shape)
-				print("Pitching DF 2018 shape: ", pitching_df_2018.shape)
+		if verbose:
+			print("Batting DF 2018 shape: ", batting_df_2018.shape)
+			print("Pitching DF 2018 shape: ", pitching_df_2018.shape)
 
-			#2018 data contained some old data from other years, vice versa for 2017.  make sure each is cleaned to the appropriate year
-			batting_df_2018 = batting_df_2018[batting_df_2018['year'] == 2018.0]
-			pitching_df_2018 = pitching_df_2018[pitching_df_2018['year'] == 2018.0]
-			batting_df_2017 = batting_df_2017[batting_df_2017['year'] < 2018.0]
-			pitching_df_2017 = pitching_df_2017[pitching_df_2017['year'] < 2018.0]
+		#2018 data contained some old data from other years, vice versa for 2017.  make sure each is cleaned to the appropriate year
+		batting_df_2018 = batting_df_2018[batting_df_2018['year'] == 2018.0]
+		pitching_df_2018 = pitching_df_2018[pitching_df_2018['year'] == 2018.0]
+		batting_df_2017 = batting_df_2017[batting_df_2017['year'] < 2018.0]
+		pitching_df_2017 = pitching_df_2017[pitching_df_2017['year'] < 2018.0]
 
-			batting_df = pd.concat([batting_df_2017, batting_df_2018])
-			pitching_df = pd.concat([pitching_df_2017, pitching_df_2018])
+		batting_df = pd.concat([batting_df_2017, batting_df_2018])
+		pitching_df = pd.concat([pitching_df_2017, pitching_df_2018])
 
-			if verbose:
-				print("Batting DF after concat: \n")
-				print(batting_df.year.value_counts())
-				print("Pitching DF after concat: \n")
-				print(pitching_df.year.value_counts())
+		if verbose:
+			print("Batting DF after concat: \n")
+			print(batting_df.year.value_counts())
+			print("Pitching DF after concat: \n")
+			print(pitching_df.year.value_counts())
 
-			if write_csv:
-				batting_df.to_csv("batting_df_master.csv", index=False, header=True)
-				pitching_df.to_csv("pitching_df_master.csv", index=False, header=True)
+		if write_csv:
+			batting_df.to_csv("batting_df_master.csv", index=False, header=True)
+			pitching_df.to_csv("pitching_df_master.csv", index=False, header=True)
 
-			return batting_df, pitching_df
+		return batting_df, pitching_df
 
 	def create_player_lookup_csv(self):
 		"""
@@ -559,7 +538,7 @@ class DatabaseHelper(object):
 		the raw database
 
 		"""
-		raw_data = self.dh.pull_raw_statcast_data()
+		raw_data = self.pull_raw_data()
 
 		batter_ids = set(raw_data.batter.unique())
 		pitcher_ids = set(raw_data.pitcher.unique())
