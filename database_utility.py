@@ -2,6 +2,7 @@ import sqlite3
 import pandas as pd
 import numpy as np
 import datetime
+import math
 
 from pybaseball import playerid_reverse_lookup
 
@@ -380,6 +381,20 @@ class DatabaseHelper(object):
 		return batter_dataframe_final
 
 	def fd_batting_score(self, row):
+
+		# Null batter indicates a misalignment with bbref and statcast
+		if math.isnan(row['batter']):
+			# This returns 0 for AT BATs that result in strikeouts, flyouts, and nonscoring events
+			if (row['H'] == 0) and (row['RBI'] == 0) and row['BB'] == 0:
+				return 0
+			# This returns scoring values under specific conditions that dont not involving batting
+			else:
+				y = 0
+				y = y + float(row['RBI']) * 3.5
+				y = y + float(row['R']) * 3.2
+				y = y + float(row['BB']) * 3
+				return y
+
 		x = 0
 		# Does data capture the following scenario:
 		# 1 x HR = 12pts + 3.2pts <- is this how fanduel works?
