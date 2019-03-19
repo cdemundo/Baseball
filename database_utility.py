@@ -232,7 +232,7 @@ class DatabaseHelper(object):
 
 		#find the quality starts using boolean filters
 		qual_start_df = pitching_df[(pitching_df['ER'] <= 3) & (pitching_df['is_first_pitcher'] == 1) & (pitching_df['IP'] >= 6)]
-		
+
 		#qual_start_df['quality_start'] = 1
 		qual_start_df.insert(0, 'quality_start', 1)
 		#take only the columns we need
@@ -278,7 +278,7 @@ class DatabaseHelper(object):
 
 		return ip_pts+so_pts+er_pts+win_pts+qual_start_pts
 
-	def calc_batting_fd_score(self, start_date='2015-04-01', end_date='2018-07-19', preload=True):
+	def calc_batting_fd_score(self, start_date='2015-04-01', end_date='2018-07-19', preload=True, write_csv=False, path2017="", path2018=""):
 		# PART 1 - get bbref data
 		# Inputs:
 		# start_date - beginning of time to pull statcast data
@@ -294,7 +294,7 @@ class DatabaseHelper(object):
 		# As we scrape more and icnrease our dataset we can hone in on specific seasons using these date variables
 
 		# PART 1 - pull in bbref data and store as a df to be merge later
-		batting_df, pitching_df = self.load_data(preload=preload)
+		batting_df, pitching_df = self.load_data(path2017=path2017, path2018=path2018, preload=preload, write_csv=write_csv)
 
 		# PART 2 - get statcast data
 		try:
