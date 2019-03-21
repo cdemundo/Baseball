@@ -2,6 +2,7 @@ import sqlite3
 import pandas as pd
 import numpy as np
 import datetime
+import math
 
 from pybaseball import playerid_reverse_lookup
 
@@ -234,7 +235,7 @@ class DatabaseHelper(object):
 
 		#find the quality starts using boolean filters
 		qual_start_df = pitching_df[(pitching_df['ER'] <= 3) & (pitching_df['is_first_pitcher'] == 1) & (pitching_df['IP'] >= 6)]
-		
+
 		#qual_start_df['quality_start'] = 1
 		qual_start_df.insert(0, 'quality_start', 1)
 		#take only the columns we need
@@ -280,7 +281,7 @@ class DatabaseHelper(object):
 
 		return ip_pts+so_pts+er_pts+win_pts+qual_start_pts
 
-	def calc_batting_fd_score(self, start_date='2015-04-01', end_date='2018-07-19', preload=True):
+	def calc_batting_fd_score(self, start_date='2015-04-01', end_date='2018-07-19', preload=True, write_csv=False, path2017="", path2018=""):
 		# PART 1 - get bbref data
 		# Inputs:
 		# start_date - beginning of time to pull statcast data
@@ -296,7 +297,7 @@ class DatabaseHelper(object):
 		# As we scrape more and icnrease our dataset we can hone in on specific seasons using these date variables
 
 		# PART 1 - pull in bbref data and store as a df to be merge later
-		batting_df, pitching_df = self.load_data(preload=preload)
+		batting_df, pitching_df = self.load_data(path2017=path2017, path2018=path2018, preload=preload, write_csv=write_csv)
 
 		# PART 2 - get statcast data
 		try:
@@ -382,6 +383,20 @@ class DatabaseHelper(object):
 		return batter_dataframe_final
 
 	def fd_batting_score(self, row):
+
+		# Null batter indicates a misalignment with bbref and statcast
+		if math.isnan(row['batter']):
+			# This returns 0 for AT BATs that result in strikeouts, flyouts, and nonscoring events
+			if (row['H'] == 0) and (row['RBI'] == 0) and row['BB'] == 0:
+				return 0
+			# This returns scoring values under specific conditions that dont not involving batting
+			else:
+				y = 0
+				y = y + float(row['RBI']) * 3.5
+				y = y + float(row['R']) * 3.2
+				y = y + float(row['BB']) * 3
+				return y
+
 		x = 0
 		# Does data capture the following scenario:
 		# 1 x HR = 12pts + 3.2pts <- is this how fanduel works?

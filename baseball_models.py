@@ -6,11 +6,13 @@ from sklearn.metrics import mean_absolute_error
 import time
 import datetime
 
+from pybaseball import playerid_reverse_lookup
+
 class CrossValidator(object):
-	
+
 	def train_test_split(self, X, y, num_splits = 2):
 		'''
-			This function should be called on any data we are using to split it before we do anything into training, development and test data. 
+			This function should be called on any data we are using to split it before we do anything into training, development and test data.
 
 			We will ALWAYS reserve the last 2 months of data (Aug-Sept of 2018) as final test data
 
@@ -126,7 +128,7 @@ class CrossValidator(object):
 			self.test_maes.append(mean_absolute_error(self.y_test, self.test_preds))
 			print("Iter " + str(i+1) + " took " + str(time.time()-start) + " seconds.")
 			i += 1
-		#if we are at the last iteration, lets return the predicted values from the test set so we can 
+		#if we are at the last iteration, lets return the predicted values from the test set so we can
 		#put them into the optimizer
 		self.id_preds = list(zip(self.test_preds, self.X_test_ids))
 
@@ -163,12 +165,12 @@ class CrossValidator(object):
 
 class MovingAverageModel(object):
 	#def __init__(self):
-		
+
 	def fit(self, X, y, num_days=5):
 
 		self.X = X
 		self.y = y
-		
+
 		self.X['fd_score'] = y
 
 		#calculate moving average for every game in X
@@ -201,10 +203,10 @@ class MovingAverageModel(object):
 	def get_moving_avg(self, row):
 		'''
 			Helper function that looks up the moving average in fitted X values based on the player name and the game date
-			
+
 			Parameters
 			--------------
-			row : Pandas series 
+			row : Pandas series
 				Expected to contain keys 'player' and 'game_date'
 
 			Returns
@@ -230,42 +232,42 @@ class MovingAverageModel(object):
 			return val
 
 class FeatureEngineer(object):
-	
+
 	def __init__(self,df):
 		if len(df) == 0:
 			print("Need to pass a dataframe to engineer on initializing!")
 			return ""
 		#select only the numeric cols, excluding the year
 		self.num_cols = list(df.select_dtypes(include=np.number).drop('year', axis=1).columns.values)
-		
+
 		#for calculating averages, we want a df sorted by player and date
 		self.avg_df = df.sort_values(['player', 'game_date'])
-		
+
 	def calc_lifetime_avg(self):
-		
+
 		return_df = self.avg_df.copy()
-		
+
 		new_cols = ['game_id']
-		
+
 		for col in self.num_cols:
 			if col != 'fd_score':
-				
+
 				newcol = col+'_lifeavg'
-				
+
 				#we group by player and date and calc expanded mean. we shift down by one to make sure no current day info is included
 				return_df[newcol] = return_df.sort_values(['player', 'game_date']).groupby(['player'])[col].expanding().mean().shift().values
 				#set the first value for each player to NaN since we wouldnt have data for it
 				return_df.loc[return_df.groupby(['player'])[newcol].head(1).index, newcol] = np.NaN
-				
+
 				new_cols.append(newcol)
 
 		#we return just the game_id and the new columns created.  These can be merged with other features created before going to the model
 		return return_df[new_cols]
 
 	def calc_rolling_avg(self):
-	
+
 		return_df = self.avg_df.copy()
-		
+
 		#we need to figure out if these are pitching averages or batting averages - different timeframes are relevant
 		try:
 			return_df['IP']
@@ -273,15 +275,15 @@ class FeatureEngineer(object):
 		except KeyError:
 			#1-4 week and 6 week
 			avgs = [7,14,21,28,42]
-		
+
 		new_cols = ['game_id']
-		
+
 		for col in self.num_cols:
 			if col != 'fd_score':
 				for avg in avgs:
-					
+
 					newcol = col + '_' + str(avg) + 'dayavg'
-			   
+
 					#we group by player and date and calc expanded mean. we shift down by one to make sure no current day info is included
 					return_df[newcol] = return_df.sort_values(['player', 'game_date']).groupby(['player'])[col].rolling(avg,avg).mean().shift().values
 					#set the first value for each player to NaN since we wouldnt have data for it
@@ -291,18 +293,18 @@ class FeatureEngineer(object):
 
 		#we return just the game_id and the new columns created.  These can be merged with other features created before going to the model
 		return return_df[new_cols]
-	
+
 	def calc_ytd_avgs(self):
-	
-		return_df = self.avg_df.copy()  
-		
+
+		return_df = self.avg_df.copy()
+
 		#since it's YTD, we want to make sure we sort by year as well
 		return_df = return_df.sort_values(['player', 'year', 'game_date'])
-	  
+
 		new_cols = ['game_id']
-		
+
 		for col in self.num_cols:
-			if col != 'fd_score':                   
+			if col != 'fd_score':
 				newcol = col+'_ytdavg'
 
 				#we group by player and year and calc expanded mean. we shift down by one to make sure no current day info is included
@@ -314,7 +316,75 @@ class FeatureEngineer(object):
 
 		#we return just the game_id and the new columns created.  These can be merged with other features created before going to the model
 		return return_df[new_cols]
-	
 
-	
+	# For the first time, include the path to the statcast cache, follow on running can include preload=True
+	def stadium_batter_avg(self, switch_cutoff=0.05, preload=False, filepath_statcast_cache = '../statcast_cache.csv'):
 
+		batting_df = self.avg_df.copy()
+
+		batting_column = 'batting_hand_' + str(switch_cutoff)
+
+		if not preload:
+			try:
+				statcast_frame_raw = pd.read_csv(filepath_statcast_cache)
+			except:
+				print("Could not locate statcast_cache.csv, please check filepath_statcast_cache value")
+				return ""
+
+			left_right_hand = statcast_frame_raw.groupby(['batter', 'stand']).size()
+
+			left_right_hand = left_right_hand.reset_index()
+			left_right_hand.rename(columns={0:"bat_count"}, inplace=True)
+
+			# Convert to long format with columns titled L / R (Left or Right handed pitches received)
+			lr_pivot = left_right_hand.pivot(columns='stand', index="batter", values='bat_count')
+			lr_pivot = lr_pivot.reset_index()
+			lr_pivot = lr_pivot.fillna(0)
+
+			# Creates helpyer columns to calculate how many pitches each player received
+			# for each hand, and calculate the % of switch hitting each engaged in
+			lr_pivot['primary_hand'] = np.where(lr_pivot['L'] > lr_pivot['R'], 'L', 'R')
+			lr_pivot['major_count'] = np.where(lr_pivot['L'] > lr_pivot['R'], lr_pivot['L'], lr_pivot['R'])
+			lr_pivot['minor_count'] = np.where(lr_pivot['L'] > lr_pivot['R'], lr_pivot['R'], lr_pivot['L'])
+			lr_pivot['switch_perc'] = (lr_pivot['minor_count'] / lr_pivot['major_count'])
+			lr_pivot = lr_pivot.replace(np.inf, np.nan).fillna(0)
+
+			# if a player performs more than 5% of their bats using the other hand, they're classified as a switch hitter
+			lr_pivot[batting_column] = np.where(lr_pivot['switch_perc'] < switch_cutoff, lr_pivot['primary_hand'], "S")
+
+			lr_pivot.sort_values(by='switch_perc', ascending=False)
+
+			left_right = lr_pivot[['batter', batting_column]]
+
+			# Lookup 'batter keys' to mlb keys
+			player_list = left_right['batter'].tolist()
+
+			# Lookup keys to get each player's various keys (mlb, bbref, etc.)
+			player_id_values = playerid_reverse_lookup(player_list, key_type='mlbam')
+
+			# Merge player keys to batter df based on key
+			cols_to_merge = ['name_last', 'name_first', 'key_mlbam', 'key_bbref', 'key_fangraphs', 'key_retro']
+			left_right_with_keys = left_right.merge(player_id_values[cols_to_merge], how='inner', left_on='batter', right_on='key_mlbam')
+
+			# Cache
+			print('Creating cache "batter_hand.csv" in current directory...')
+			left_right_with_keys.to_csv('batter_hand.csv', index=False)
+
+		# Load the cache
+		left_right = pd.read_csv('batter_hand.csv')
+
+		batting_df2 = batting_df.merge(left_right[[batting_column, 'key_bbref']], how="left", left_on="player", right_on="key_bbref")
+		batting_df2.drop('key_bbref', 1, inplace=True)
+
+		# Grouyp by stadium and batting hand.  Possible future expansion here based on date, maybe not tho
+		stadium_hand_averages = batting_df2.groupby(['stadium', batting_column])['batting_avg'].mean()
+		stadium_hand_averages = stadium_hand_averages.reset_index()
+
+		stadium_hand_averages.rename({"batting_avg": 'stadium_batting_avg_' + str(switch_cutoff) }, axis=1, inplace=True)
+
+		# Bring in the stadium averages to our normal DF (so we link back up with game_id)
+		batting_df3 = batting_df2.merge(stadium_hand_averages, how="left", left_on=["stadium", batting_column], right_on=["stadium", batting_column])
+
+		return_frame = batting_df3[[ 'game_id', 'stadium_batting_avg_' + str(switch_cutoff) ]]
+
+		return return_frame
