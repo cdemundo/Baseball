@@ -388,3 +388,21 @@ class FeatureEngineer(object):
 		return_frame = batting_df3[[ 'game_id', 'stadium_batting_avg_' + str(switch_cutoff) ]]
 
 		return return_frame
+
+	def stadium_dummies(self):
+
+		batting_df = self.avg_df.copy()
+
+		orig_columns = batting_df.columns.tolist()
+		orig_columns.remove('game_id')
+
+		cols_to_convert = ['game_situation', 'team', 'day_of_week', 'stadium']
+
+		# Remove values fropped during get_dummies call from list to be used to drop all old values
+		for value in cols_to_convert:
+		    orig_columns.remove(value)
+
+		loc_time_day_frame = pd.get_dummies(batting_df, columns=cols_to_convert, drop_first=True)
+		loc_time_day_frame.drop(orig_columns, axis=1, inplace=True)
+
+		return loc_time_day_frame
