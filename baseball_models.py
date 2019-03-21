@@ -79,12 +79,13 @@ class CrossValidator(object):
 				return X[known_good_batting_features]
 
 		elif pitching == True:
-			known_good_pitching_features = ['game_id']
+			#we dont know good features yet so just return X
+			#known_good_pitching_features = ['game_id']
 			if len(new_features) > 0:
 				features_to_keep = list(set(known_good_pitching_features).union(set(new_features)))
 				return X[features_to_keep]
 			else:
-				return X[known_good_pitching_features]
+				return X
 
 		else:
 			print("Either batting or pitching flag must be true!")

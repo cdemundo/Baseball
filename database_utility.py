@@ -83,6 +83,8 @@ class DatabaseHelper(object):
 			try:
 				batting_df = pd.read_csv('batting_df_master.csv')
 				pitching_df = pd.read_csv('pitching_df_master.csv')
+
+				print("CSV's Loaded!! Returning batting and pitching df")
 			except FileNotFoundError:
 				print("Couldn't find the files raw_batting_df.csv and raw_pitching_df.csv in the current directory.")
 				return ""
@@ -298,9 +300,9 @@ class DatabaseHelper(object):
 
 		# PART 2 - get statcast data
 		try:
-			statcast_input_frame = pd.read_csv('statcast_cache.csv')
 			print("Accessing statcast_cache...")
 			print("If dates are missing try rebuilding cache...")
+			statcast_input_frame = pd.read_csv('statcast_cache.csv')
 		except:
 			print("Getting raw statcast data...")
 			statcast_input_frame = self.pull_raw_statcast_data(start_date=start_date, end_date=end_date)
