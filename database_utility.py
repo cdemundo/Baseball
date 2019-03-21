@@ -79,7 +79,7 @@ class DatabaseHelper(object):
 		'''
 
 		if preload:
-			print("Trying to load csvs!")
+			print("Trying to load raw csvs!")
 
 			try:
 				batting_df = pd.read_csv('batting_df_master.csv')
@@ -280,6 +280,55 @@ class DatabaseHelper(object):
 		qual_start_pts = row['quality_start']*4
 
 		return ip_pts+so_pts+er_pts+win_pts+qual_start_pts
+
+	def calc_fd_scores_roto(self, start_date='2015-04-01', end_date='2018-07-19', preload=True, write_csv=False, path2017="", path2018=""):
+		#the dates in rotoguru are in a weird format, need to clean them
+
+		# PART 1 - pull in bbref data and store as a df to be merge later
+		batting_df, pitching_df = self.load_data(preload=True, write_csv=False, path2017="", path2018="")
+		#Our batting and pitching df need to match on this new game_id
+		batting_df['roto_game_id'] = batting_df['game_date'] + batting_df['player']
+		pitching_df['roto_game_id'] = pitching_df['game_date'] + pitching_df['player']
+
+		print("Loading rotoguru data..")
+
+		try:
+		    rotoguru = pd.read_csv("roto_data_2015-2018.csv")
+		except FileNotFoundError:
+		    print("Couldn't find the rotoguru csv!") 
+
+		#match rotoguru to baseball reference with different keys
+		print("Getting bbref key to merge rotoguru and bbref data")
+		unique_players = list(rotoguru['MLB_ID'].unique())
+		lookup = playerid_reverse_lookup(unique_players)
+
+		rotoguru = pd.merge(rotoguru, lookup[['key_mlbam', 'key_bbref']], left_on='MLB_ID', right_on='key_mlbam')
+
+		print("Cleaning up rotoguru dates..")
+		#we need to make the rotoguru dates match the bbref date format - use a helper function
+		rotoguru['game_date'] = rotoguru.apply(self.clean_rotoguru_dates, axis=1)
+		rotoguru.drop('Date', axis=1, inplace=True)
+
+		print("Merging bbref and rotoguru data to get FD scores")
+		#create a unique id to merge rotoguru and bbref data
+		rotoguru['roto_game_id'] = rotoguru['game_date'] + rotoguru['key_bbref']
+
+		print("Batting df pre merge: ", batting_df.shape)
+		rotoguru = rotoguru[['roto_game_id', 'FD_points', 'Pos']]
+		batting_df = pd.merge(batting_df, rotoguru, on='roto_game_id')
+		print("Batting df post merge: ", batting_df.shape)
+
+		print("Pitching df pre merge: ", pitching_df.shape)
+		rotoguru = rotoguru[['roto_game_id', 'FD_points', 'Pos']]
+		pitching_df = pd.merge(pitching_df, rotoguru, on='roto_game_id')
+		print("Pitching df post merge: ", pitching_df.shape)
+
+		#we want to remove pitchers - we're not going to include them in the batting model, we have a separate df for pitching
+		batting_df = batting_df[batting_df['Pos'] != 'P']
+		batting_df.dropna(inplace=True)
+
+		return batting_df, pitching_df
+
 
 	def calc_batting_fd_score(self, start_date='2015-04-01', end_date='2018-07-19', preload=True, write_csv=False, path2017="", path2018=""):
 		# PART 1 - get bbref data
@@ -514,6 +563,18 @@ class DatabaseHelper(object):
 			print("Couldn't find the baseball stadium csv - should be called 'baseball_key_joiner.csv")
 
 		return df
+
+	def clean_rotoguru_dates(self, row):
+		'''Helper function to clean up rotoguru dates, which are in the format 20150127.0 (as a float)'''
+		date = str(row['Date'])
+		
+		y, md = date[:4], date[4:]
+
+		m, d = md[:2], md[2:4]
+
+		clean_date = y + "-" + m + "-" + d
+		
+		return clean_date
 
 	def combine_scraped_data(self, path2018, path2017, write_csv=False, verbose=False):
 		'''This function is a utility function that combines the multiple scraped data files we have.  We have saved the datasets to a CSV, but if we ever need to recreate them'''
