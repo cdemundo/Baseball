@@ -7,6 +7,7 @@ import time
 import datetime
 
 from pybaseball import playerid_reverse_lookup
+import category_encoders as ce
 
 class CrossValidator(object):
 
@@ -109,15 +110,15 @@ class CrossValidator(object):
 				X_test.fillna(0, inplace=True)
 
 			#remove the ids so we can link them back up to predictions later
-			self.X_train_ids = self.X_train['game_id']
-			self.X_train = self.X_train.drop('game_id', axis=1)
+			self.X_train_ids = self.X_train['roto_game_id']
+			self.X_train = self.X_train.drop('roto_game_id', axis=1)
 
 			#train the model
 			self.model = model.fit(self.X_train, self.y_train)
 
 			#same procedure - remove test ids
-			self.X_test_ids = self.X_test['game_id']
-			self.X_test = self.X_test.drop('game_id', axis=1)
+			self.X_test_ids = self.X_test['roto_game_id']
+			self.X_test = self.X_test.drop('roto_game_id', axis=1)
 
 			#run predictions using trained model
 			self.train_preds = self.model.predict(self.X_train)
@@ -243,14 +244,17 @@ class FeatureEngineer(object):
 		#for calculating averages, we want a df sorted by player and date
 		self.avg_df = df.sort_values(['player', 'game_date'])
 
+		#we changed and are merging features on a different ID -create it here so it can be used by all functions
+		self.avg_df['roto_game_id'] = self.avg_df['game_date'] + self.avg_df['player']
+
 	def calc_lifetime_avg(self):
 
 		return_df = self.avg_df.copy()
 
-		new_cols = ['game_id']
+		new_cols = ['roto_game_id']
 
 		for col in self.num_cols:
-			if col != 'fd_score':
+			if col != 'FD_points':
 
 				newcol = col+'_lifeavg'
 
@@ -276,10 +280,10 @@ class FeatureEngineer(object):
 			#1-4 week and 6 week
 			avgs = [7,14,21,28,42]
 
-		new_cols = ['game_id']
+		new_cols = ['roto_game_id']
 
 		for col in self.num_cols:
-			if col != 'fd_score':
+			if col != 'FD_points':
 				for avg in avgs:
 
 					newcol = col + '_' + str(avg) + 'dayavg'
@@ -301,10 +305,10 @@ class FeatureEngineer(object):
 		#since it's YTD, we want to make sure we sort by year as well
 		return_df = return_df.sort_values(['player', 'year', 'game_date'])
 
-		new_cols = ['game_id']
+		new_cols = ['roto_game_id']
 
 		for col in self.num_cols:
-			if col != 'fd_score':
+			if col != 'FD_points':
 				newcol = col+'_ytdavg'
 
 				#we group by player and year and calc expanded mean. we shift down by one to make sure no current day info is included
@@ -388,3 +392,71 @@ class FeatureEngineer(object):
 		return_frame = batting_df3[[ 'game_id', 'stadium_batting_avg_' + str(switch_cutoff) ]]
 
 		return return_frame
+
+	def rotoguru_features(self, batting=True):
+		'''Rotoguru contains data on weather, batting order and windspeed/direction.'''
+
+		try:
+		    rotoguru = pd.read_csv("roto_data_2015-2018.csv")
+		except FileNotFoundError:
+		    print("Couldn't find the rotoguru csv!") 
+
+		#match rotoguru to baseball reference with different keys
+		print("Getting bbref key to merge rotoguru and bbref data")
+		unique_players = list(rotoguru['MLB_ID'].unique())
+		lookup = playerid_reverse_lookup(unique_players)
+
+		rotoguru = pd.merge(rotoguru, lookup[['key_mlbam', 'key_bbref']], left_on='MLB_ID', right_on='key_mlbam')
+
+		print("Cleaning up rotoguru dates..")
+		#we need to make the rotoguru dates match the bbref date format - use a helper function
+		rotoguru['game_date'] = rotoguru.apply(self.clean_rotoguru_dates, axis=1)
+		rotoguru.drop('Date', axis=1, inplace=True)
+
+		print("Merging bbref and rotoguru data to get FD scores")
+		#create a unique id to merge rotoguru and bbref data
+		rotoguru['roto_game_id'] = rotoguru['game_date'] + rotoguru['key_bbref']
+
+		if batting:
+			#there are only certain relevant columns we want to keep
+			batter_cols = ['Condition', 'Hand', 'FD_points', 'FD_salary', 'Gametime_ET', 'Home_Ump', 'H/A', 'Oppt', 'Oppt_pitch_Name', 'Oppt_pitch_MLB_ID', 'Oppt_pitch_hand', 'Order', 'Pos', 'Temp', \
+			               'W_dir', 'W_speed', 'roto_game_id']
+
+			batters = rotoguru[rotoguru['Pos'] != 'P']
+			batters = batters[batter_cols]
+
+			batters['Order'] = batters['Order'].astype(str)
+
+			ohe = ce.OneHotEncoder(handle_unknown='ignore', use_cat_names=True)
+			batters_ohe = ohe.fit_transform(batters[['H/A', 'Condition', 'W_dir', 'Order']])
+			batters_ohe.drop(['H/A_a', 'Condition_nan', 'W_dir_nan', 'Order_nan'], axis=1, inplace=True)
+			#add in relevant game_id
+			batters_ohe['roto_game_id'] = batters['roto_game_id']
+
+			return batters_ohe
+		else: #return pitching df instead
+			pitcher_cols = ['Condition', 'FD_points', 'FD_salary', 'Gametime_ET', 'Home_Ump', 'IP', 'H/A', 'Oppt', 'Oppt_pitch_Name', 'Oppt_pitch_MLB_ID', 'Oppt_pitch_hand', 'QS', 'Temp', \
+			               'W_dir', 'W_speed', 'roto_game_id']
+
+			pitchers = rotoguru[rotoguru['Pos'] == 'P']
+			pitchers = pitchers[pitcher_cols]			
+
+			ohe = ce.OneHotEncoder(handle_unknown='ignore', use_cat_names=True)
+			pitchers_ohe = ohe.fit_transform(pitchers[['H/A', 'Condition', 'W_dir']])
+			pitchers_ohe.drop(['H/A_a', 'Condition_nan', 'W_dir_nan'], axis=1, inplace=True)
+
+			pitchers_ohe['roto_game_id'] = pitchers['roto_game_id']
+
+			return pitchers_ohe
+
+	def clean_rotoguru_dates(self, row):
+		'''Helper function to clean up rotoguru dates, which are in the format 20150127.0 (as a float)'''
+		date = str(row['Date'])
+		
+		y, md = date[:4], date[4:]
+
+		m, d = md[:2], md[2:4]
+
+		clean_date = y + "-" + m + "-" + d
+		
+		return clean_date
