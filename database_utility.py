@@ -295,7 +295,7 @@ class DatabaseHelper(object):
 		try:
 		    rotoguru = pd.read_csv("roto_data_2015-2018.csv")
 		except FileNotFoundError:
-		    print("Couldn't find the rotoguru csv!") 
+		    print("Couldn't find the rotoguru csv!")
 
 		#match rotoguru to baseball reference with different keys
 		print("Getting bbref key to merge rotoguru and bbref data")
@@ -328,7 +328,6 @@ class DatabaseHelper(object):
 		batting_df.dropna(inplace=True)
 
 		return batting_df, pitching_df
-
 
 	def calc_batting_fd_score(self, start_date='2015-04-01', end_date='2018-07-19', preload=True, write_csv=False, path2017="", path2018=""):
 		# PART 1 - get bbref data
@@ -567,13 +566,13 @@ class DatabaseHelper(object):
 	def clean_rotoguru_dates(self, row):
 		'''Helper function to clean up rotoguru dates, which are in the format 20150127.0 (as a float)'''
 		date = str(row['Date'])
-		
+
 		y, md = date[:4], date[4:]
 
 		m, d = md[:2], md[2:4]
 
 		clean_date = y + "-" + m + "-" + d
-		
+
 		return clean_date
 
 	def combine_scraped_data(self, path2018, path2017, write_csv=False, verbose=False):
