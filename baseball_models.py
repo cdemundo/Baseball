@@ -406,3 +406,31 @@ class FeatureEngineer(object):
 		loc_time_day_frame.drop(orig_columns, axis=1, inplace=True)
 
 		return loc_time_day_frame
+
+	def stadium_stats(self, ballpark_stat_path='ballpark_handed_stats.csv', ballpark_key_path='../baseball_key_joiner.csv'):
+		# ballpark_stat_path is the link to the new file uploaded to github "ballpark_handed_stats.csv"
+		# ballpark_key_path is the link to the original baseball_key_joiner.csv file
+
+		batting_df = self.avg_df.copy()
+
+		ballpark_hand = pd.read_csv(ballpark_stat_path)
+		ballpark_keys = pd.read_csv(ballpark_key_path)
+
+		ballpark_hand = ballpark_hand.merge(ballpark_keys[['stadium','team_abbr']], how="left", left_on="stadium_abbr", right_on="team_abbr")
+
+		# Label incoming columns
+		#ballpark_hand = ballpark_hand.add_prefix('stadium_')
+
+		# add "stadium_stadium" and "stadium_year" to verify dates and locations
+		stad_cols = ['game_id', 'stadium_BA', 'stadium_OBP', 'stadium_SLG', 'stadium_OPS', 'stadium_BAbip']
+
+		# Roll stadium data points back 1 year, so bbref 2017 is joined with stadium data from 2016
+		ballpark_hand['stadium_Year'] = ballpark_hand['stadium_Year'] - 1
+
+		stadium_features = batting_df.merge(ballpark_hand,
+		                                   how="left",
+		                                   left_on=["stadium", "year"],
+		                                   right_on=["stadium_stadium", "stadium_Year"])
+
+		stadium_features = stadium_features[stad_cols]
+		return stadium_features
