@@ -407,7 +407,7 @@ class FeatureEngineer(object):
 
 		return loc_time_day_frame
 
-	def stadium_stats(self, ballpark_stat_path='ballpark_handed_stats.csv', ballpark_key_path='../baseball_key_joiner.csv'):
+	def stadium_stats(self, ballpark_stat_path='ballpark_handed_stats.csv', ballpark_key_path='baseball_key_joiner.csv', batter_hand_path = 'batter_hand.csv'):
 		# ballpark_stat_path is the link to the new file uploaded to github "ballpark_handed_stats.csv"
 		# ballpark_key_path is the link to the original baseball_key_joiner.csv file
 
@@ -415,6 +415,7 @@ class FeatureEngineer(object):
 
 		ballpark_hand = pd.read_csv(ballpark_stat_path)
 		ballpark_keys = pd.read_csv(ballpark_key_path)
+		batter_hand = pd.read_csv(batter_hand_path)
 
 		ballpark_hand = ballpark_hand.merge(ballpark_keys[['stadium','team_abbr']], how="left", left_on="stadium_abbr", right_on="team_abbr")
 
@@ -429,8 +430,8 @@ class FeatureEngineer(object):
 
 		stadium_features = batting_df.merge(ballpark_hand,
 		                                   how="left",
-		                                   left_on=["stadium", "year"],
-		                                   right_on=["stadium_stadium", "stadium_Year"])
+                                   left_on=["stadium", "year", "batting_hand_0.4999999991"],
+                                   right_on=["stadium_stadium", "stadium_Year", "stadium_Hand"])
 
 		stadium_features = stadium_features[stad_cols]
 		return stadium_features
