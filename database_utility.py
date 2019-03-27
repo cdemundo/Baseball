@@ -427,6 +427,8 @@ class DatabaseHelper(object):
 		# statcast and bbref
 		batter_dataframe_final['walk'] = np.where(batter_dataframe_final['walk'].isnull(), batter_dataframe_final['BB'], batter_dataframe_final['walk'])
 
+		batter_dataframe_final['roto_game_id'] = batter_dataframe_final['game_date'].astype(str) + batter_dataframe_final['player'].astype(str)
+
 		print("Batting FD Score calculated! Returning data..")
 		return batter_dataframe_final
 
