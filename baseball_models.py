@@ -393,13 +393,59 @@ class FeatureEngineer(object):
 
 		return return_frame
 
+	def stadium_dummies(self):
+
+		batting_df = self.avg_df.copy()
+
+		orig_columns = batting_df.columns.tolist()
+		orig_columns.remove('game_id')
+
+		cols_to_convert = ['game_situation', 'team', 'day_of_week', 'stadium']
+
+		# Remove values fropped during get_dummies call from list to be used to drop all old values
+		for value in cols_to_convert:
+		    orig_columns.remove(value)
+
+		loc_time_day_frame = pd.get_dummies(batting_df, columns=cols_to_convert, drop_first=True)
+		loc_time_day_frame.drop(orig_columns, axis=1, inplace=True)
+
+		return loc_time_day_frame
+
+	def stadium_stats(self, ballpark_stat_path='ballpark_handed_stats.csv', ballpark_key_path='../baseball_key_joiner.csv'):
+		# ballpark_stat_path is the link to the new file uploaded to github "ballpark_handed_stats.csv"
+		# ballpark_key_path is the link to the original baseball_key_joiner.csv file
+
+		batting_df = self.avg_df.copy()
+
+		ballpark_hand = pd.read_csv(ballpark_stat_path)
+		ballpark_keys = pd.read_csv(ballpark_key_path)
+
+		ballpark_hand = ballpark_hand.merge(ballpark_keys[['stadium','team_abbr']], how="left", left_on="stadium_abbr", right_on="team_abbr")
+
+		# Label incoming columns
+		#ballpark_hand = ballpark_hand.add_prefix('stadium_')
+
+		# add "stadium_stadium" and "stadium_year" to verify dates and locations
+		stad_cols = ['game_id', 'stadium_BA', 'stadium_OBP', 'stadium_SLG', 'stadium_OPS', 'stadium_BAbip']
+
+		# Roll stadium data points back 1 year, so bbref 2017 is joined with stadium data from 2016
+		ballpark_hand['stadium_Year'] = ballpark_hand['stadium_Year'] + 1
+
+		stadium_features = batting_df.merge(ballpark_hand,
+		                                   how="left",
+		                                   left_on=["stadium", "year"],
+		                                   right_on=["stadium_stadium", "stadium_Year"])
+
+		stadium_features = stadium_features[stad_cols]
+		return stadium_features
+
 	def rotoguru_features(self, batting=True):
 		'''Rotoguru contains data on weather, batting order and windspeed/direction.'''
 
 		try:
 		    rotoguru = pd.read_csv("roto_data_2015-2018.csv")
 		except FileNotFoundError:
-		    print("Couldn't find the rotoguru csv!") 
+		    print("Couldn't find the rotoguru csv!")
 
 		#match rotoguru to baseball reference with different keys
 		print("Getting bbref key to merge rotoguru and bbref data")
@@ -439,7 +485,7 @@ class FeatureEngineer(object):
 			               'W_dir', 'W_speed', 'roto_game_id']
 
 			pitchers = rotoguru[rotoguru['Pos'] == 'P']
-			pitchers = pitchers[pitcher_cols]			
+			pitchers = pitchers[pitcher_cols]
 
 			ohe = ce.OneHotEncoder(handle_unknown='ignore', use_cat_names=True)
 			pitchers_ohe = ohe.fit_transform(pitchers[['H/A', 'Condition', 'W_dir']])
@@ -452,11 +498,11 @@ class FeatureEngineer(object):
 	def clean_rotoguru_dates(self, row):
 		'''Helper function to clean up rotoguru dates, which are in the format 20150127.0 (as a float)'''
 		date = str(row['Date'])
-		
+
 		y, md = date[:4], date[4:]
 
 		m, d = md[:2], md[2:4]
 
 		clean_date = y + "-" + m + "-" + d
-		
+
 		return clean_date
